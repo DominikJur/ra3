@@ -15,6 +15,9 @@ plausible-sounding prose.
   corpus uploads.
 - **A complete research loop.** Discover papers (Semantic Scholar, citation traversal, open-access
   PDF resolution), read them (text + page images, OCR for scans), index them, and query the result.
+- **An evolving knowledge base.** Everything you index — including the papers a deep-research run
+  reads — accumulates permanently in one SQLite file, so your library compounds with each session
+  and stays searchable later.
 - **Retrieval you can rely on.** Zero-shot SciFact nDCG@10 of 0.70 — on par with SPLADE, ahead of
   ColBERT and Contriever — so the passages it cites are the right ones.
 - **Bring your own model.** RA³ does retrieval; pair it with whichever LLM you run (local or

@@ -84,7 +84,7 @@ async function resolveSource(source: string): Promise<{ buf: Buffer; slug: strin
   return { buf, slug: slug || "document", label: s };
 }
 
-async function enqueueDoc(params: any, progress: (msg: string) => void): Promise<any> {
+async function indexDoc(params: any, progress: (msg: string) => void): Promise<any> {
   progress(`Resolving source: ${params.source}`);
   const src = String(params.source).trim();
   const { buf, slug: derivedSlug } = await resolveSource(src);
@@ -361,7 +361,7 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_id: string, params: any, _signal?: AbortSignal, onUpdate?: any, _ctx?: any) {
       try {
-        const result = await enqueueDoc(params, (m) => onUpdate?.({ content: [{ type: "text", text: m }] }));
+        const result = await indexDoc(params, (m) => onUpdate?.({ content: [{ type: "text", text: m }] }));
         return {
           content: [
             {

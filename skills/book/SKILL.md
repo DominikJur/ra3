@@ -18,10 +18,10 @@ description: Local knowledge base over indexed books and papers. Use to index a 
 ## Rules
 - Do **not** re-index the same document; index once, search many times. Use `reindex: true` only to
   replace a stale copy.
-- For large books, prefer `document_index({ source, background: true })` so the terminal isn't blocked.
+- Indexing is synchronous — `document_index` returns once the document is searchable (large books just take longer). There is no background queue.
 - Restrict a query to one document with `docs: "slug"` (or `"a,b"` for several).
 - Scanned (image-only) PDFs are OCR'd automatically on index (slow, flagged in the result).
 
 ## Storage
-- Per document: `~/pi_research/books/<slug>/` (`paper.pdf`, `paper.txt`, `structure.json`).
-- Global index: `~/pi_research/books/.index/` (chunks, vectors, meta).
+- Per document: `~/pi_research/books/<slug>/` (the raw `paper.pdf` is kept alongside).
+- Global index: `~/pi_research/books/kb.sqlite` — one SQLite file holding docs, chunks, and dense/sparse vectors.

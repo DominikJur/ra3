@@ -140,68 +140,6 @@ export function ingestChunks(opts: {
   return opts.chunks.length;
 }
 
-// ---- ingest (called by the outbox when a job is done) --------------------
-
-function decodeVectors(v: any): Float32Array {
-  if (v?.data) {
-    const b = Buffer.from(v.data, "base64");
-    return new Float32Array(b.buffer, b.byteOffset, Math.floor(b.byteLength / 4));
-  }
-  if (Array.isArray(v)) {
-    return new Float32Array(v.flat());
-  }
-  throw new Error("ingest: no vector payload in job result");
-}
-
-export function ingestResult(slug: string, result: any): { chunks: number } {
-  const d = getDb();
-  const chunks: Array<{ page: number; section: string; text: string }> = result.chunks ?? [];
-  const dim = result.dim ?? DIM;
-  const model = result.model ?? "bge-m3";
-  const vectors = decodeVectors(result.vectors);
-  const source = result.source ?? slug;
-  const pages = result.pages ?? 0;
-  const lang = result.lang ?? null;
-
-  const oldIds = (d.prepare("SELECT chunk_id FROM chunks WHERE doc = ?").all(slug) as any[]).map((r) => BigInt(r.chunk_id));
-  d.exec("BEGIN");
-  try {
-    if (oldIds.length) {
-      const ph = oldIds.map(() => "?").join(",");
-      d.prepare(`DELETE FROM vec_chunks WHERE chunk_id IN (${ph})`).run(...oldIds);
-    }
-    d.prepare("DELETE FROM chunks WHERE doc = ?").run(slug);
-    d.prepare("DELETE FROM docs WHERE slug = ?").run(slug);
-
-    d.prepare("INSERT INTO docs (slug, source, pages, chunks, hash, model, dim, lang) VALUES (?,?,?,?,?,?,?,?)").run(
-      slug,
-      source,
-      pages,
-      chunks.length,
-      simpleHash(source),
-      model,
-      dim,
-      lang,
-    );
-
-    const ins = d.prepare("INSERT INTO chunks (doc, page, section, text) VALUES (?,?,?,?)");
-    const insVec = d.prepare("INSERT INTO vec_chunks (chunk_id, embedding) VALUES (?,?)");
-    for (let i = 0; i < chunks.length; i++) {
-      const c = chunks[i];
-      const r = ins.run(slug, Number(c.page ?? 0), String(c.section ?? ""), String(c.text ?? ""));
-      const cid = r.lastInsertRowid;
-      const slice = vectors.subarray(i * dim, (i + 1) * dim);
-      insVec.run(BigInt(cid), Buffer.from(slice.buffer, slice.byteOffset, slice.byteLength));
-    }
-    d.exec("COMMIT");
-  } catch (e) {
-    d.exec("ROLLBACK");
-    throw e;
-  }
-  bm25Cache = null; // invalidate keyword cache
-  return { chunks: chunks.length };
-}
-
 // ---- search --------------------------------------------------------------
 
 interface BM25Cache {

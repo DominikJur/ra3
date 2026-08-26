@@ -13,7 +13,7 @@ Run a literature-backed research pipeline end-to-end. Work in these phases and w
 
 ## 2. Gather
 - Call `academic_graph_search` with several **distinct** queries (different phrasings/angles). Record title, abstract, year, authors, citation count, DOI/arXiv id, and open-access PDF link for each result.
-- **Queue key papers immediately.** The moment a result looks relevant, call `document_index({ source: "<doi-or-url>" })` to enqueue it for GPU indexing (MinerU + bge-m3). Do NOT wait until the end of the run — the queue processes in the background, so queuing early means results are ready sooner. `document_index` is idempotent (it returns "already queued"/"indexed" for a re-submit), so queuing the same paper twice is harmless.
+- **Index key papers immediately.** The moment a result looks relevant, call `document_index({ source: "<doi-or-url>" })` to index it into the knowledge base (extract → embed → ingest). Indexing is synchronous — the paper is searchable the moment the call returns — so index early rather than batching at the end. `document_index` is idempotent (re-submitting the same source is harmless; pass `reindex: true` to replace a previous copy).
 - Note non-paper leads as they surface — GitHub repositories, datasets, code, tools, demos — with URLs; they feed the report's *Promising leads* section.
 
 ## 3. Expand
@@ -24,7 +24,7 @@ For papers that actually matter:
 - `pdf_extract` with `mode="text"` to skim the full text cheaply.
 - `pdf_extract` with `mode="render"` to produce page PNGs, then call the `read` tool on the `.png` files to read figures, tables, and equations. Rendered pages preserve two-column layout exactly, which plain text extraction does not.
 - Prefer `doi` (or arXiv id) over a raw URL so the open-access copy is resolved automatically.
-- Papers are already queued (from Gather/Expand) — do not re-queue, `document_index` dedups. If a paper only proves key *after* deep-reading, queue it then — but never later than the moment you decide it matters.
+- Papers are already indexed (from Gather/Expand) — do not re-index, `document_index` dedups. If a paper only proves key *after* deep-reading, index it then — but never later than the moment you decide it matters.
 
 ## 5. Synthesize
 - Write the final report to `~/pi_research/<today-YYYY-MM-DD>/<topic-slug>.md` (create the folder if needed).
@@ -48,7 +48,7 @@ Write all mathematics in real LaTeX embedded in the Markdown (it must render in 
 - `unpaywall_resolver(doi)` → `{ is_oa, pdf, oa_status, ... }`
 - `pdf_extract(url? | doi?, mode="text"|"render", pages="1-5", dpi=150)`
 - `document_index(source, name?, reindex?)` → append a PDF/paper to the knowledge base
-- `document_search(query, k=10, docs?, keyword=false)` → dense bge-m3 top-k chunks with page/section/snippet (set `keyword=true` for exact-symbol lookups; LaTeX may have stray spaces)
+- `document_search(query, k=10, docs?, keyword?)` → hybrid (dense + BM25 + sparse) top-k chunks with page/section/snippet (pass `keyword=false` for dense-only; LaTeX may have stray spaces)
 - `document_status()` → list indexed documents
 
 ## Notes
@@ -56,4 +56,4 @@ Write all mathematics in real LaTeX embedded in the Markdown (it must render in 
 - Unpaywall uses `UNPAYWALL_EMAIL` (set to your real email).
 - Extracted files live under `.deep-research/papers/<slug>/` (`paper.pdf`, `paper.txt`, `page-NN.png`).
 - Text extraction is best-effort reading order. For exact layout, tables, and figures, use the rendered PNGs.
-- The knowledge base lives in `~/pi_research/books/`; key papers indexed during a run are searchable in later sessions via `document_search`.
+- The knowledge base lives in `~/pi_research/books/` and is **persistent and evolving**: every paper indexed during a run stays there and is searchable in later sessions via `document_search`.
