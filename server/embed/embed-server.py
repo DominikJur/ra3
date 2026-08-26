@@ -1,9 +1,9 @@
-# Reference embedding server — FlagEmbedding BGE-M3 (dense + learned-sparse).
+# Reference embedding server: FlagEmbedding BGE-M3 (dense + learned-sparse).
 #
 # This is the canonical encoder for RA³. The vectors stored in kb.sqlite were produced by
 # THIS build (BGE-M3, fp16, CLS pooling, L2-normalized dense). Keep the query embedder identical:
 # a different BGE-M3 build (Xenova q8, ollama bge-m3, a different pooling mode, …) is a different
-# embedding manifold — cosine scores between mismatched manifolds are meaningless.
+# embedding manifold: cosine scores between mismatched manifolds are meaningless.
 #
 # fp16 vs fp32 of THIS build is NOT a manifold change: it is the same weights computed at
 # different precision, so cosine rankings are unaffected. We therefore use fp16 only when a GPU
@@ -60,5 +60,5 @@ def embed(req: Req):
 if __name__ == "__main__":
     import uvicorn
     # 127.0.0.1 by default (safe, reachable via SSH tunnel). Set EMBED_HOST=0.0.0.0 to expose
-    # on a cloud GPU box — the server has NO auth, so only do that behind a firewall/private net.
+    # on a cloud GPU box: the server has NO auth, so only do that behind a firewall/private net.
     uvicorn.run(app, host=os.environ.get("EMBED_HOST", "127.0.0.1"), port=8001)

@@ -1,7 +1,7 @@
 {
   "name": "ra3",
   "version": "0.1.0",
-  "description": "RA³ — Retrieval-Augmented Academic Agent: a private knowledge base + academic deep-research pipeline for pi.",
+  "description": "RA³: Retrieval-Augmented Academic Agent: a private knowledge base + academic deep-research pipeline for pi.",
   "keywords": ["pi-package", "rag", "deep-research", "knowledge-base", "retrieval"],
   "license": "Apache-2.0",
   "type": "module",

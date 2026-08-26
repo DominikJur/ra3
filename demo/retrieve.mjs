@@ -6,7 +6,7 @@
 //
 // Requires: node >= 22.5 (node:sqlite), `npm install` at the repo root, and an
 // embedding server at EMBED_BASE_URL (default http://localhost:8001) serving
-// BGE-M3 dense + sparse — the same build used to index the corpus.
+// BGE-M3 dense + sparse: the same build used to index the corpus.
 import { searchDocuments } from "../extensions/deep-research/lib/kb-sqlite.ts";
 
 const DEFAULT_Q = [
@@ -22,7 +22,7 @@ for (const q of questions) {
   try {
     const res = await searchDocuments(q, { k: 4 });
     if (!res.results.length) {
-      console.log("  (no results — index the demo book first, see demo/README.md)");
+      console.log("  (no results: index the demo book first, see demo/README.md)");
       continue;
     }
     for (const r of res.results) {

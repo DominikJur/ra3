@@ -4,8 +4,8 @@
 // almost nothing for scanned pages. When the extracted text density is too
 // low, document_index can fall back to a self-hosted OCR server reached via
 // OCR_BASE_URL (default http://localhost:8002). Two interchangeable servers
-// ship in server/: MinerU (`server/ocr/`, heavy — math/tables/layout) and
-// Tesseract (`server/ocr-light/`, light — plain text only). Both implement
+// ship in server/: MinerU (`server/ocr/`, heavy: math/tables/layout) and
+// Tesseract (`server/ocr-light/`, light: plain text only). Both implement
 // POST /file_parse -> {results: {<stem>: {md_content}}}; we split the returned
 // markdown into per-page sections so the regular chunking/embedding/ingest
 // path is reused.

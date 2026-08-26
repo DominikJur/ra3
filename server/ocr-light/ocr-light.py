@@ -1,10 +1,10 @@
-# Light OCR server — Tesseract (text-only, no VLM, no GPU).
+# Light OCR server: Tesseract (text-only, no VLM, no GPU).
 #
 # A CPU-friendly drop-in for the heavy MinerU OCR server. It implements the SAME contract
 # (POST /file_parse -> {"results": {<stem>: {"md_content": ...}}}) that lib/ocr.ts expects, so
 # the client is agnostic: point OCR_BASE_URL at this server instead of MinerU.
 #
-# VULNERABILITIES (on purpose — this trades fidelity for lightness; see ocr-light/README.md):
+# VULNERABILITIES (on purpose: this trades fidelity for lightness; see ocr-light/README.md):
 #   - NO math/formula recognition: equations, symbols, sub/superscripts come out as garbage.
 #   - NO table structure: tables are flattened into running text.
 #   - NO reading-order guarantee: multi-column layouts may be read column-by-column or

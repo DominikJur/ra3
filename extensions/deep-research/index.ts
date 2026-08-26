@@ -101,12 +101,12 @@ async function indexDoc(params: any, progress: (msg: string) => void): Promise<a
   let { sections, pageCount } = await extractPdf(new Uint8Array(buf));
   const ocrUrl = ocrBaseUrl();
   if (ocrUrl && isScannedPdf(sections, pageCount)) {
-    progress("Low text density — routing to MinerU OCR...");
+    progress("Low text density: routing to MinerU OCR...");
     try {
       ({ sections, pageCount } = await ocrPdf(buf, ocrUrl, progress));
       progress(`OCR complete: ${pageCount} pages, ${sections.reduce((a, s) => a + s.text.length, 0)} chars`);
     } catch (e) {
-      progress(`OCR failed (${(e as Error).message}) — falling back to pdfjs extraction`);
+      progress(`OCR failed (${(e as Error).message}): falling back to pdfjs extraction`);
     }
   }
   const chunks = chunkSections(sections, 2000);
@@ -172,7 +172,7 @@ function restoreQueue(): void {
     if (!Array.isArray(jobs)) return;
     for (const j of jobs) {
       if (j.status === "processing") {
-        // interrupted by a previous shutdown — retry it
+        // interrupted by a previous shutdown: retry it
         j.status = "queued";
         j.progress = "queued (resumed after restart)";
       }
@@ -198,7 +198,7 @@ function refreshQueueUi(): void {
       sessionCtx.ui.setStatus?.("ra3-kb", undefined);
       return;
     }
-    const lines = active.slice(0, 6).map((j) => `${j.status === "processing" ? "⏳" : "⏱"} ${j.label} — ${j.progress}`);
+    const lines = active.slice(0, 6).map((j) => `${j.status === "processing" ? "⏳" : "⏱"} ${j.label}: ${j.progress}`);
     if (active.length > 6) lines.push(`… +${active.length - 6} more`);
     sessionCtx.ui.setWidget?.("ra3-kb", lines);
     sessionCtx.ui.setStatus?.("ra3-kb", `indexing ${processing.length} · ${queued.length} queued`);
@@ -222,12 +222,12 @@ async function pumpQueue(): Promise<void> {
         job.status = "done";
         job.chunks = result.chunks;
         persistQueue();
-        notify(`${job.label}: indexed ${result.chunks} chunks — searchable now`, "info");
+        notify(`${job.label}: indexed ${result.chunks} chunks: searchable now`, "info");
       } catch (e) {
         job.status = "error";
         job.error = (e as Error).message;
         persistQueue();
-        notify(`${job.label}: indexing failed — ${(e as Error).message}`, "error");
+        notify(`${job.label}: indexing failed: ${(e as Error).message}`, "error");
       }
       refreshQueueUi();
     }
@@ -452,7 +452,7 @@ export default function (pi: ExtensionAPI) {
           if (!slug) slug = slugify(params.url ?? "paper");
           onUpdate?.({ content: [{ type: "text", text: `Downloading ${pdfUrl} ...` }] });
           buf = await fetchBuffer(pdfUrl, _signal);
-          if (buf.length < 1024) throw new Error("Downloaded file is suspiciously small — probably not a PDF.");
+          if (buf.length < 1024) throw new Error("Downloaded file is suspiciously small: probably not a PDF.");
         } else {
           return toolError("pdf_extract: provide a PDF url, or a doi that resolves to an open-access PDF (try unpaywall_resolver first).");
         }
@@ -509,14 +509,13 @@ export default function (pi: ExtensionAPI) {
       "Index a PDF (path, URL, DOI, or arXiv id) into the knowledge base. Runs in the background: queues the job and returns immediately; searchable when it finishes. Text PDFs are extracted locally (pdfjs); scanned PDFs route to MinerU OCR if OCR_BASE_URL is set.",
     promptSnippet: "Index a PDF into the knowledge base (background)",
     promptGuidelines: [
-      "Asynchronous — queues and returns immediately. Watch document_status for progress.",
+      "Asynchronous: queues and returns immediately. Watch document_status for progress.",
       "Queue papers as soon as you find them (don't batch at the end).",
     ],
     parameters: Type.Object({
       source: Type.String({ description: "Local path, https URL, DOI, or arXiv id of the PDF." }),
       name: Type.Optional(Type.String({ description: "Optional slug/name for the document (defaults to filename/DOI)." })),
       reindex: Type.Optional(Type.Boolean({ description: "Replace any existing chunks for this document (default false)." })),
-      background: Type.Optional(Type.Boolean({ description: "Deprecated — indexing always runs in the background." })),
     }),
     async execute(_id: string, params: any, _signal?: AbortSignal, _onUpdate?: any, ctx?: any) {
       try {
@@ -526,7 +525,7 @@ export default function (pi: ExtensionAPI) {
           status: "queued",
           job_id: job.id,
           label: job.label,
-          note: "Indexing runs in the background — you can keep working and queue more documents. Track progress with document_status; a notification fires when the job finishes.",
+          note: "Indexing runs in the background, you can keep working and queue more documents. Track progress with document_status; a notification fires when the job finishes.",
         };
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
       } catch (e) {
@@ -545,7 +544,7 @@ export default function (pi: ExtensionAPI) {
     promptGuidelines: [
       "Hybrid (dense + keyword) is the default; pass keyword=false for dense-only.",
       "LaTeX in chunks may have stray spaces (x ^ { p }, \\int _ { a }); match symbols loosely.",
-      "k defaults to 10 and is cheap — cite returned page numbers and read those pages for detail.",
+      "k defaults to 10 and is cheap: cite returned page numbers and read those pages for detail.",
     ],
     parameters: Type.Object({
       query: Type.String({ description: "Natural-language or keyword query." }),
@@ -614,7 +613,7 @@ export default function (pi: ExtensionAPI) {
     label: "Export Knowledge Base",
     renderCall: renderToolCall,
     description:
-      "Export the knowledge base to a portable single-file SQLite snapshot (optionally gzipped). Lossless — docs, chunks, and vectors are copied verbatim, so it re-imports without re-embedding.",
+      "Export the knowledge base to a portable single-file SQLite snapshot (optionally gzipped). Lossless: docs, chunks, and vectors are copied verbatim, so it re-imports without re-embedding.",
     promptSnippet: "Export the knowledge base to a portable .sqlite file",
     promptGuidelines: [
       "Append .gz (or gzip=true) to compress; document_import_kb auto-detects .gz.",
@@ -638,7 +637,7 @@ export default function (pi: ExtensionAPI) {
     label: "Import Knowledge Base",
     renderCall: renderToolCall,
     description:
-      "Import documents from a KB snapshot (from document_export_kb) into the live knowledge base. Merges by default; replace=true overwrites. Vectors are copied verbatim — no re-embedding.",
+      "Import documents from a KB snapshot (from document_export_kb) into the live knowledge base. Merges by default; replace=true overwrites. Vectors are copied verbatim: no re-embedding.",
     promptSnippet: "Import a KB snapshot (.sqlite or .sqlite.gz)",
     promptGuidelines: [
       "Merges by default; replace=true overwrites existing docs.",

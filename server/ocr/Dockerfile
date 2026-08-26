@@ -1,4 +1,4 @@
-# Reference OCR server — MinerU 3.x (pipeline backend).
+# Reference OCR server: MinerU 3.x (pipeline backend).
 #
 # HEAVY option. Installs torch + downloads PDF-Extract-Kit-1.0 models (~GBs). GPU strongly
 # recommended. Good at math, tables, and layout; slow on CPU.
@@ -26,7 +26,7 @@ COPY mineru.json /root/mineru.json
 # Persist models + HF cache across restarts.
 VOLUME ["/models", "/root/.cache/huggingface"]
 
-# Bind 0.0.0.0 so `docker run -p 8002:8002` works. The API has NO auth — expose only behind a
+# Bind 0.0.0.0 so `docker run -p 8002:8002` works. The API has NO auth: expose only behind a
 # firewall/private network, or keep it local and tunnel.
 EXPOSE 8002
 CMD ["mineru-api", "--host", "0.0.0.0", "--port", "8002"]

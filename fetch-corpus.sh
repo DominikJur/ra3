@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# Fetch the demo corpus: "Finite Difference Computing with PDEs — A Modern Software
-# Approach" (Langtangen & Linge, Springer 2017). The book is CC BY 4.0 — free to
-# redistribute — and the compiled PDF lives on the author's companion site.
-#
-# NOTE: do NOT substitute the UDL (Prince) PDF — it is CC BY-NC-ND, not CC BY.
+# Fetch the demo corpus: "Finite Difference Computing with PDEs: A Modern Software
+# Approach" (Langtangen & Linge, Springer 2017). The book is CC BY 4.0: free to
+# redistribute, and the compiled PDF lives on the author's companion site.
 set -euo pipefail
 
 OUT="${1:-books/langtangen_fdm.pdf}"

@@ -1,4 +1,4 @@
-# RA³ demo — Q → R → A
+# RA³ demo: Q → R → A
 
 This walks the full pipeline for the hard finite-difference question, one sub-question at a time:
 
@@ -12,7 +12,7 @@ RRF-fused). Page numbers are **PDF pages** as stored in the KB (book page = PDF 
 
 ---
 
-# Q — the question
+# Q: the question
 
 Answer all three parts with exact formulas, citing `(source: langtangen-fdm, p. N)` per claim.
 
@@ -20,7 +20,7 @@ Answer all three parts with exact formulas, citing `(source: langtangen-fdm, p. 
 1. derive the Crank–Nicolson amplification factor and state its stability / oscillation
    condition (in terms of F = αΔt/Δx²);
 2. derive the leapfrog quadratic for the amplification factor, give its two roots, and explain
-   why the scheme is *always* unstable for this equation — and why it works well for
+   why the scheme is *always* unstable for this equation and why it works well for
    first-order-in-space PDEs.
 
 **(b) Advection, leapfrog and CFL.**
@@ -67,7 +67,7 @@ A = (1 − 2F sin²p) / (1 + 2F sin²p),    F = αΔt/Δx²,  p = kΔx/2      (e
 
 ## (a2) Leapfrog for diffusion
 
-**Q.** Derive the leapfrog quadratic, give its two roots, and explain why it is always unstable for `u_t = αu_xx` — yet works for first-order-in-space PDEs.
+**Q.** Derive the leapfrog quadratic, give its two roots, and explain why it is always unstable for `u_t = αu_xx`: yet works for first-order-in-space PDEs.
 
 **R.** Retrieved from the KB:
 

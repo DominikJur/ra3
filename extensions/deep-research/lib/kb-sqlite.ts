@@ -187,7 +187,7 @@ async function embedQuery(text: string): Promise<QueryEmbed> {
   } catch {
     // No local vector fallback on purpose: the stored vectors are FlagEmbedding BGE-M3 fp16.
     // Any other build (Xenova q8, ollama bge-m3, …) is a *different embedding manifold*, so its
-    // cosine scores against the stored vectors are meaningless — better to drop the dense+sparse
+    // cosine scores against the stored vectors are meaningless: better to drop the dense+sparse
     // legs than to return silently-wrong rankings. BM25 still covers the query.
     return { dense: null, sparse: new Map() };
   }
@@ -281,7 +281,7 @@ export async function searchDocuments(
   const useKeyword = opts.keyword !== false;
   const total = Number((d.prepare("SELECT count(*) AS c FROM chunks").get() as any).c);
   if (total === 0) {
-    return { results: [], total: 0, model: "", dense: false, message: "Knowledge base is empty — docs may still be queued (see document_status)." };
+    return { results: [], total: 0, model: "", dense: false, message: "Knowledge base is empty: docs may still be queued (see document_status)." };
   }
 
   const allowedSet = opts.docs && opts.docs.length ? new Set(opts.docs) : null;
@@ -374,7 +374,7 @@ export async function searchDocuments(
   });
   const out: any = { results, total, model: "bge-m3", dim: DIM, dense: denseOk,
                      strength: denseOk && dense.length ? Number(dense[0].score.toFixed(4)) : 0 };
-  if (!denseOk && useKeyword) out.message = "Embed server unreachable — dense+sparse legs off (no vector fallback: a different BGE-M3 build would be a mismatched manifold); results are keyword-only (BM25).";
+  if (!denseOk && useKeyword) out.message = "Embed server unreachable: dense+sparse legs off (no vector fallback: a different BGE-M3 build would be a mismatched manifold); results are keyword-only (BM25).";
   return out;
 }
 
@@ -399,7 +399,7 @@ export function listDocuments(): any[] {
 
 // ---- export / import ------------------------------------------------------
 
-// Snapshot the whole KB to a single portable SQLite file — lossless: docs + chunks +
+// Snapshot the whole KB to a single portable SQLite file: lossless: docs + chunks +
 // dense (vec_chunks) + learned-sparse (sparse_terms) vectors are copied verbatim, so the
 // snapshot re-imports without re-embedding. Optionally gzip (inferred from a .gz extension
 // or gzip:true).
@@ -466,7 +466,7 @@ function copyDocFromDb(srcDb: DatabaseSync, dstDb: DatabaseSync, slug: string): 
       if (nid != null && v.embedding) insVec.run(BigInt(nid), Buffer.from(v.embedding));
     }
 
-    // learned-sparse (batched multi-row INSERT — 3.6M single-row execs is the import bottleneck)
+    // learned-sparse (batched multi-row INSERT: 3.6M single-row execs is the import bottleneck)
     const spRows = srcDb.prepare(`SELECT chunk_id, term, weight FROM sparse_terms WHERE chunk_id IN (${ph})`).all(...srcIds) as any[];
     const B = 500;
     for (let i = 0; i < spRows.length; i += B) {

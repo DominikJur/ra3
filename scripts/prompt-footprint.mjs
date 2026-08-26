@@ -8,12 +8,12 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-// 1. Skills + policy — injected into the prompt verbatim.
+// 1. Skills + policy: injected into the prompt verbatim.
 const files = ["AGENTS.md", "skills/book/SKILL.md", "skills/deep-research/SKILL.md"];
 let skillsChars = 0;
 for (const f of files) skillsChars += readFileSync(path.join(root, f), "utf8").length;
 
-// 2. Tool definitions — extract the prompt-facing string fields from index.ts.
+// 2. Tool definitions: extract the prompt-facing string fields from index.ts.
 const src = readFileSync(path.join(root, "extensions/deep-research/index.ts"), "utf8");
 const sum = (re) => { let t = 0; for (const m of src.matchAll(re)) t += m[1].length; return t; };
 const toolChars =

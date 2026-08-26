@@ -6,7 +6,7 @@ in the corpus.
 
 ## Corpus
 
-*Finite Difference Computing with PDEs — A Modern Software Approach* (Langtangen & Linge,
+*Finite Difference Computing with PDEs: A Modern Software Approach* (Langtangen & Linge,
 Springer 2017, **CC BY 4.0**). Fetch it with `./fetch-corpus.sh` (verified mirror on the
 author's site, ~5.7 MB), then index:
 
@@ -25,7 +25,7 @@ Answer all three parts with exact formulas, citing `(source: langtangen-fdm, p. 
 - derive the amplification factor of the Crank–Nicolson scheme and state its stability /
   oscillation condition (in terms of F = αΔt/Δx²);
 - derive the leapfrog scheme's quadratic for the amplification factor, give its two roots,
-  and explain why the scheme is *always* unstable for this equation — and why it works well
+  and explain why the scheme is *always* unstable for this equation and why it works well
   for first-order-in-space PDEs.
 
 **(b) Advection, leapfrog and CFL.** For the linear advection equation with the working
@@ -54,7 +54,7 @@ schemes of chapter 4:
 | (c) Picard | book 447 / PDF 471 | eq. (5.35): `(u − u⁻)/Δt = ∇·(α(u⁻)∇u) + f(u⁻)`, seeded from previous time level |
 | (c) Newton | book 448 / PDF 472 | eqs. (5.36)–(5.37): `u = u^(n,k) + δu`, Taylor-expand, solve linear PDE for δu |
 
-(Page numbers are the **PDF** page numbers as stored in the KB — the book's printed page is
+(Page numbers are the **PDF** page numbers as stored in the KB: the book's printed page is
 PDF − 24.)
 
 ## Run

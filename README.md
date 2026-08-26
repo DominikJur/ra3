@@ -309,5 +309,4 @@ graph-RAG retrieval: please open an issue on this repository.
 
 ## License
 
-Apache-2.0. (The demo corpus is CC BY 4.0 and is *not* bundled: `fetch-corpus.sh` downloads it.
-Do not substitute *Understanding Deep Learning* (Prince), which is CC BY-NC-ND.)
+Apache-2.0. (The demo corpus is CC BY 4.0 and is *not* bundled: `fetch-corpus.sh` downloads it.)

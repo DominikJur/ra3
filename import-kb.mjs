@@ -5,7 +5,7 @@
 //   node import-kb.mjs <src.sqlite[.gz]> [--replace]
 //
 // Merges by default (existing slugs are skipped); --replace overwrites them. Vectors are
-// copied verbatim — no re-embedding.
+// copied verbatim: no re-embedding.
 import { importKb } from "./extensions/deep-research/lib/kb-sqlite.ts";
 
 const args = process.argv.slice(2);
