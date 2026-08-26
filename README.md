@@ -204,7 +204,7 @@ Today retrieval is *flat*: it ranks chunks by vector + keyword similarity. The r
 **graph-RAG** — a knowledge graph built over your corpus, so a query can follow *relations*
 (entities, concepts, citations, "what builds on what") rather than only matching passages.
 
-- **A local, LLM-generated knowledge graph.** Entities and relations are extracted by an LLM on
+- **A local-LLM generated knowledge graph.** Entities and relations are extracted by an LLM on
   your own machine — nothing leaves it — and stored alongside the embeddings, so one corpus serves
   both flat retrieval and graph traversal.
 - **The open problem: extracting meaningful relations from books in a timely manner.** Books are
