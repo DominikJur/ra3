@@ -1,0 +1,33 @@
+# dependencies
+node_modules/
+
+# runtime data / personal state (never commit)
+*.sqlite
+*.sqlite-*
+pi_research/
+books/
+.deep-research/
+
+# SciFact eval artifacts (keep eval.py, drop downloads/caches)
+scifact_eval/scifact/
+scifact_eval/scifact.zip
+scifact_eval/doc_*.npy
+scifact_eval/doc_*.json
+
+# secrets
+.env
+auth.json
+
+# personal / experimental (not part of the package)
+graph_rag/
+knowledge_graph/
+
+# OS / editor / build
+.DS_Store
+.vscode/
+.idea/
+*.tsbuildinfo
+
+# python
+__pycache__/
+*.pyc

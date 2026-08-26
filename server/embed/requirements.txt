@@ -1,0 +1,6 @@
+# Reference embedding server (FlagEmbedding BGE-M3, fp16).
+# Install torch for your platform FIRST (CUDA or CPU), then:
+#   pip install -r requirements.txt
+FlagEmbedding>=1.2.10
+fastapi>=0.110
+uvicorn>=0.29
