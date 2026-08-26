@@ -5,14 +5,14 @@ description: Local knowledge base over indexed books and papers. Index PDFs and 
 
 # Book / Document Knowledge Base
 
-1. **Index once** — `document_index({ source })` where `source` is a path, URL, DOI, or arXiv id.
-   Async: it queues and returns immediately; the doc is searchable when the job finishes — check
+1. **Index once**: `document_index({ source })` where `source` is a path, URL, DOI, or arXiv id.
+   Async: it queues and returns immediately; the doc is searchable when the job finishes: check
    `document_status`.
-2. **Search** — `document_search({ query, k?, docs?, keyword? })` → top-k chunks with `doc`, `page`,
+2. **Search**: `document_search({ query, k?, docs?, keyword? })` → top-k chunks with `doc`, `page`,
    `section`, `snippet`. Hybrid by default; `keyword: false` for dense-only. LaTeX may have stray
    spaces. Cite returned page numbers.
-3. **Read figures/equations** — `pdf_extract({ mode: "render" })`, then `read` the `.png` pages.
-4. **Status** — `document_status()` lists indexed docs + the queue.
+3. **Read figures/equations**: `pdf_extract({ mode: "render" })`, then `read` the `.png` pages.
+4. **Status**: `document_status()` lists indexed docs + the queue.
 
 ## Rules
 - Index once, search many times; `reindex: true` only to replace a stale copy.

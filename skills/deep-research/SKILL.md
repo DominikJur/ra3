@@ -14,9 +14,9 @@ Run a literature-backed research pipeline end-to-end; write the final report to 
 ## 2. Gather
 - `academic_graph_search` with several distinct queries. Record title, abstract, year, authors,
   citation count, DOI/arXiv id, open-access link.
-- **Queue key papers immediately** with `document_index({ source: "<doi-or-url>" })` — async, so
+- **Queue key papers immediately** with `document_index({ source: "<doi-or-url>" })`: async, so
   queue as you find them, never batch at the end. Re-submitting re-indexes (wasteful for books).
-- Note non-paper leads (repos, datasets, code, tools) with URLs — for *Promising leads*.
+- Note non-paper leads (repos, datasets, code, tools) with URLs: for *Promising leads*.
 
 ## 3. Expand
 - `academic_citations` both directions (`citations` = who cites it; `references` = what it cites).
@@ -30,7 +30,7 @@ Run a literature-backed research pipeline end-to-end; write the final report to 
 - Write to `~/pi_research/<YYYY-MM-DD>/<topic-slug>.md`.
 - Inline citations (author, year, DOI/URL) on every claim; state only what sources say; flag thin or
   conflicting evidence.
-- End with `## Promising leads` — non-paper leads, one line + URL each, flagged *unverified*.
+- End with `## Promising leads`: non-paper leads, one line + URL each, flagged *unverified*.
 
 ## Mathematics
 Real LaTeX in the Markdown (must render on GitHub/VS Code):

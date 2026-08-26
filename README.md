@@ -1,12 +1,12 @@
-# RA³ — Retrieval-Augmented Academic Agent
+# RA³: Retrieval-Augmented Academic Agent
 
-Ask questions of your books and papers — and get answers grounded in the text, with page
+Ask questions of your books and papers and get answers grounded in the text, with page
 citations, that you can verify yourself.
 
 ## What it does
 
 RA³ turns your PDFs into a private, searchable knowledge base that your agent cites instead of
-guessing. Built for researchers who need answers that trace to specific passages — not
+guessing. Built for researchers who need answers that trace to specific passages, not
 plausible-sounding prose.
 
 - **Cited, verifiable answers.** Every claim is backed by a retrieved passage and cited as
@@ -15,44 +15,42 @@ plausible-sounding prose.
   corpus uploads.
 - **A complete research loop.** Discover papers (Semantic Scholar, citation traversal, open-access
   PDF resolution), read them (text + page images, OCR for scans), index them, and query the result.
-- **An evolving knowledge base.** Everything you index — including the papers a deep-research run
-  reads — accumulates permanently in one SQLite file, so your library compounds with each session
+- **An evolving knowledge base.** Everything you index: including the papers a deep-research run
+  reads: accumulates permanently in one SQLite file, so your library compounds with each session
   and stays searchable later.
-- **Retrieval you can rely on.** Zero-shot SciFact nDCG@10 of 0.70 — on par with SPLADE, ahead of
-  ColBERT and Contriever — so the passages it cites are the right ones.
+- **Retrieval you can rely on.** Zero-shot SciFact nDCG@10 of 0.70: on par with SPLADE, ahead of
+  ColBERT and Contriever, so the passages it cites are the right ones.
 - **Bring your own model.** RA³ does retrieval; pair it with whichever LLM you run (local or
   hosted). No vendor lock-in.
 
 ## How it works
 
-Retrieval fuses three complementary signals — BGE-M3 dense embeddings, BM25 keyword match, and
-BGE-M3 learned-sparse weights — via reciprocal-rank fusion and a diversity reranking pass, stored
+Retrieval fuses three complementary signals: BGE-M3 dense embeddings, BM25 keyword match, and
+BGE-M3 learned-sparse weights: via reciprocal-rank fusion and a diversity reranking pass, stored
 in one SQLite file (`sqlite-vec`). Documents are chunked locally; scanned PDFs are OCR'd by a
 pluggable server (MinerU for math/layout, Tesseract for plain text). The only out-of-process
-compute is an embedding server you run yourself — CPU or GPU, or rented — see `server/`.
+compute is an embedding server you run yourself: CPU or GPU, or rented: see `server/`.
 
 ## A small addition to pi
 
-RA³ is not a fork or rewrite of pi — it's a focused set of **open-source contributions on top of
+RA³ is not a fork or rewrite of pi: it's a focused set of **open-source contributions on top of
 pi**, in the spirit of pi's minimal design. It adds **9 tools, 2 skills, and one policy file**,
 measured at **≈2.1k tokens** (down from ≈3.4k before tightening):
 
 [![system prompt footprint](docs/system-prompt-footprint.svg)](docs/system-prompt-footprint.html)
 
-*Click the chart for the interactive (hover) HTML version.*
-
 - **Measured** (`scripts/prompt-footprint.mjs`): 9 tools ≈0.8k + 2 skills + policy ≈1.3k = **≈2.1k tokens**.
 - **Deliberately absent**: no sub-agent swarm, no vendored LLM stack, no instruction wall.
 
-### Token counts — sources (full prompt = prompt text + tool definitions)
+### Token counts: sources (full prompt = prompt text + tool definitions)
 
 | agent | approx. tokens | source |
 |---|---|---|
-| pi (full) | ~2.5k | base + built-in tools (est.) — `@earendil-works/pi-coding-agent` dist |
-| pi + RA³ (full) | ~4.6k | measured — pi full + RA³ delta ~2.1k (`scripts/prompt-footprint.mjs`) |
+| pi (full) | ~2.5k | base + built-in tools (est.): `@earendil-works/pi-coding-agent` dist |
+| pi + RA³ (full) | ~4.6k | measured: pi full + RA³ delta ~2.1k (`scripts/prompt-footprint.mjs`) |
 | Cursor | ~10.2k | [WeighMyPrompt](https://weighmyprompt.com/system-prompts/cursor) |
 | Codex | ~13k | [openai/codex issue](https://github.com/openai/codex/issues/19212) |
-| Claude Code | ~18k | ~2.5k prompt + 14–17k tools — [claudecodecamp](https://www.claudecodecamp.com/p/inside-claude-code-s-system-prompt) |
+| Claude Code | ~18k | ~2.5k prompt + 14–17k tools: [claudecodecamp](https://www.claudecodecamp.com/p/inside-claude-code-s-system-prompt) |
 | GitHub Copilot CLI | ~20.5k | [copilot-cli issue](https://github.com/github/copilot-cli/issues/2627) |
 
 All figures are approximations and vary by version/configuration; the non-RA³ numbers are quoted
@@ -68,7 +66,7 @@ Out of the box, pi opens with *"You are an expert coding assistant…"*. RA³ re
 > cited by page. You write code only as a means to that end.
 
 **Why:** RA³ is a research tool, not a software-engineering tool. The re-frame keeps the agent's
-behavior pointed at literature work — retrieve → cite → synthesize — instead of code generation.
+behavior pointed at literature work: retrieve → cite → synthesize, instead of code generation.
 It's a ~40-token override of pi's role line, not a rewrite of pi's prompt.
 
 ## Install
@@ -80,7 +78,7 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 # or: curl -fsSL https://pi.dev/install.sh | sh
 ```
 
-(Needs Node.js 22.5+ — the knowledge base uses `node:sqlite`.)
+(Needs Node.js 22.5+: the knowledge base uses `node:sqlite`.)
 
 ### 2. Add a model
 
@@ -93,7 +91,7 @@ RA³ does retrieval; pi does the reasoning. Free options first:
 | **Google AI Studio** (Gemini) | free tier | grab a `GEMINI_API_KEY`, add the `google-generative-ai` provider |
 | any API (OpenAI / Anthropic / DeepSeek / …) | pay-per-token | save the key with `/login`, pick the model with `/model` |
 
-Local example — add to `~/.pi/agent/models.json`:
+Local example: add to `~/.pi/agent/models.json`:
 
 ```json
 {
@@ -110,7 +108,7 @@ Local example — add to `~/.pi/agent/models.json`:
 }
 ```
 
-The file reloads each time you open `/model` — no restart needed. (`apiKey` is a placeholder Ollama ignores.)
+The file reloads each time you open `/model`: no restart needed. (`apiKey` is a placeholder Ollama ignores.)
 
 ### 3. Recommended extras
 
@@ -119,14 +117,14 @@ pi install npm:pi-web-access    # web browser access for the agent
 pi install npm:pi-zentui        # ZentUI components
 ```
 
-### 4. Install RA³ — pi does the rest
+### 4. Install RA³: pi does the rest
 
 ```bash
 pi install git:github.com/DominikJur/ra3
 ```
 
 That one command clones the package, installs all runtime dependencies (pdfjs, sqlite-vec,
-canvas) automatically, and registers the tools + skills — no manual `npm install`.
+canvas) automatically, and registers the tools + skills: no manual `npm install`.
 
 ### 5. Point embedding at a server (the only extra step)
 
@@ -135,44 +133,44 @@ export EMBED_BASE_URL=http://localhost:8001
 ```
 
 > **One embedding manifold, one build.** The dense vectors in `kb.sqlite` were produced by
-> FlagEmbedding BGE-M3 (fp16). The query embedder must be the **same build** — a different
+> FlagEmbedding BGE-M3 (fp16). The query embedder must be the **same build**: a different
 > BGE-M3 build (Xenova/bge-m3 q8, ollama bge-m3, …) is a different embedding manifold, so its
 > cosine scores against the stored vectors are meaningless. There is **no** silent local vector
 > fallback: if the embed server is unreachable, search degrades honestly to keyword-only (BM25),
-> and indexing fails. Stand up the server first (`server/embed/embed-server.py` — see
+> and indexing fails. Stand up the server first (`server/embed/embed-server.py`: see
 > `server/README.md`).
 > **No GPU?** It runs on CPU (same build, slower), or deploy the bundled Docker image to a rented
-> GPU box (RunPod/Vast/Lambda/…) and point `EMBED_BASE_URL` at it — the server is just a URL.
+> GPU box (RunPod/Vast/Lambda/…) and point `EMBED_BASE_URL` at it: the server is just a URL.
 
 ## Quickstart
 
 ```
-document_index({ source: "path/to/book.pdf" })     # index a PDF (local/URL/DOI) — queues in the background
+document_index({ source: "path/to/book.pdf" })     # index a PDF (local/URL/DOI): queues in the background
 document_search({ query: "bias variance tradeoff" }) # hybrid search, cites (source, page)
 document_status()                                    # indexed docs + background queue progress
 ```
 
 `document_index` is **asynchronous**: it queues the job and returns immediately, so you can index
-several documents at once and keep working — indexing (and OCR) run in the background and a
+several documents at once and keep working: indexing (and OCR) run in the background and a
 notification fires when each job finishes.
 
 Scanned/image PDFs are auto-routed to an optional OCR backend (only when pdfjs text density is
 below ~40 chars/page; text PDFs are extracted fully locally by `lib/ocr.ts`). Two interchangeable
-servers ship in `server/` — point `OCR_BASE_URL` at whichever you run:
+servers ship in `server/`: point `OCR_BASE_URL` at whichever you run:
 
 ```bash
-# light (recommended without a GPU): Tesseract — plain text only, no math/table fidelity
+# light (recommended without a GPU): Tesseract: plain text only, no math/table fidelity
 #   docker build -t ra3-ocr-light server/ocr-light && docker run -p 8002:8002 ra3-ocr-light
 export OCR_BASE_URL=http://localhost:8002
 
-# heavy (GPU): MinerU — math, tables, and layout preserved
+# heavy (GPU): MinerU: math, tables, and layout preserved
 #   see server/ocr/README.md
 export OCR_BASE_URL=http://localhost:8002
 ```
 
 See `server/README.md` for the full comparison and the documented weaknesses of each.
 (**Vulnerability TL;DR:** the light server OCRs plain text well but mangles math, tables, and
-multi-column reading order — equations become garbage. Use MinerU if those matter.)
+multi-column reading order: equations become garbage. Use MinerU if those matter.)
 
 ## Import / export the knowledge base
 
@@ -194,7 +192,7 @@ node import-kb.mjs kb-export.sqlite[.gz] [--replace]
 
 Notes:
 
-- Export is a byte-exact snapshot (the WAL is folded first) — vectors are copied **verbatim**, so
+- Export is a byte-exact snapshot (the WAL is folded first): vectors are copied **verbatim**, so
   importing needs **no re-embedding** and **no GPU**.
 - Import **merges by default** (slugs already present are skipped); `replace:true` overwrites them.
   A full-KB merge import is I/O-bound by sqlite-vec's per-row insert (~6 ms/vector-row on a laptop);
@@ -209,10 +207,10 @@ Notes:
 | `EMBED_BASE_URL` | `http://localhost:8001` | BGE-M3 dense+sparse embed server |
 | `OCR_BASE_URL` | `http://localhost:8002` | OCR server for scanned PDFs (optional): MinerU (`server/ocr/`) or Tesseract (`server/ocr-light/`) |
 | `KB_ROOT` | `~/pi_research/books` | where `kb.sqlite` + per-doc dirs live |
-| `S2_API_KEY` | — | Semantic Scholar API key (avoids rate limits) |
-| `UNPAYWALL_EMAIL` | — | email for the Unpaywall API |
+| `S2_API_KEY` |: | Semantic Scholar API key (avoids rate limits) |
+| `UNPAYWALL_EMAIL` |: | email for the Unpaywall API |
 
-## Retrieval benchmark — SciFact (zero-shot)
+## Retrieval benchmark: SciFact (zero-shot)
 
 300 test queries, retrieval-only (no LLM):
 
@@ -223,7 +221,7 @@ Notes:
 | sparse only | 0.6340 | 0.9002 |
 | **3-leg (RRF)** | **0.7011** | **0.9477** |
 
-Ties SPLADE (0.706) and beats ColBERT / Contriever on SciFact — with single-vector-per-chunk
+Ties SPLADE (0.706) and beats ColBERT / Contriever on SciFact: with single-vector-per-chunk
 storage. Run it yourself: `python scifact_eval/eval.py` (embeds via `EMBED_BASE_URL`, caches
 corpus vectors). See `scifact_eval/README.md`.
 
@@ -234,16 +232,16 @@ question whose answer lives only in the book; `demo/retrieve.mjs` runs the 3-leg
 
 ## Layout
 
-- `extensions/deep-research/` — the tools (`document_index/search/status/export_kb/import_kb`,
+- `extensions/deep-research/`: the tools (`document_index/search/status/export_kb/import_kb`,
   `academic_graph_search`, `academic_citations`, `unpaywall_resolver`, `pdf_extract`).
   `lib/kb-sqlite.ts` is the KB engine.
-- `export-kb.mjs` / `import-kb.mjs` — standalone CLI wrappers for KB snapshot/merge.
-- `server/` — reference compute servers: `embed/` (FlagEmbedding BGE-M3), `ocr/` (MinerU),
+- `export-kb.mjs` / `import-kb.mjs`: standalone CLI wrappers for KB snapshot/merge.
+- `server/`: reference compute servers: `embed/` (FlagEmbedding BGE-M3), `ocr/` (MinerU),
   `ocr-light/` (Tesseract). See `server/README.md`.
-- `skills/book/` + `skills/deep-research/` — the workflow instructions.
-- `scifact_eval/` — retrieval-only benchmark harness.
-- `demo/` — the demo corpus question + retrieval script.
-- `AGENTS.md` — the RAG-first (anti-hallucination) policy.
+- `skills/book/` + `skills/deep-research/`: the workflow instructions.
+- `scifact_eval/`: retrieval-only benchmark harness.
+- `demo/`: the demo corpus question + retrieval script.
+- `AGENTS.md`: the RAG-first (anti-hallucination) policy.
 
 ## Credits & citations
 
@@ -251,65 +249,65 @@ Everything this package builds on is cited here.
 
 **Retrieval & embeddings**
 
-- **BGE-M3** — Jianlv Chen, Shitao Xiao, Peitian Zhang, Kun Luo, Defu Lian, Zheng Liu.
+- **BGE-M3**: Jianlv Chen, Shitao Xiao, Peitian Zhang, Kun Luo, Defu Lian, Zheng Liu.
   *“M3-Embedding: Multi-Linguality, Multi-Functionality, Multi-Granularity Text Embeddings
   Through Self-Knowledge Distillation.”* Findings of the Association for Computational
   Linguistics: ACL 2024. arXiv:2402.03216, DOI 10.18653/v1/2024.findings-acl.137.
   Model `BAAI/bge-m3` (MIT); served via [FlagEmbedding](https://github.com/FlagOpen/FlagEmbedding) (MIT).
-- **BM25** — S. E. Robertson & S. Walker (1994), *“Some Simple Effective Approximations to the
+- **BM25**: S. E. Robertson & S. Walker (1994), *“Some Simple Effective Approximations to the
   2-Poisson Model for Probabilistic Weighted Retrieval,”* SIGIR; and S. Robertson & H. Zaragoza
   (2009), *“The Probabilistic Relevance Framework: BM25 and Beyond,”* Foundations and Trends in
   Information Retrieval 3(4).
-- **Reciprocal Rank Fusion** — G. V. Cormack, C. L. A. Clarke, S. Büttcher (2009),
+- **Reciprocal Rank Fusion**: G. V. Cormack, C. L. A. Clarke, S. Büttcher (2009),
   *“Reciprocal Rank Fusion Outperforms Condorcet and Individual Rank Learning Methods,”* SIGIR.
-- **Maximal Marginal Relevance** — J. Carbonell & J. Goldstein (1998), *“The Use of MMR,
+- **Maximal Marginal Relevance**: J. Carbonell & J. Goldstein (1998), *“The Use of MMR,
   Diversity-Based Reranking for Reordering Documents and Producing Summaries,”* SIGIR.
 
 **OCR**
 
-- **MinerU** — Bin Wang, Chao Xu, Xiaomeng Zhao, Linke Ouyang, Fan Wu, et al. (2024),
+- **MinerU**: Bin Wang, Chao Xu, Xiaomeng Zhao, Linke Ouyang, Fan Wu, et al. (2024),
   *“MinerU: An Open-Source Solution for Precise Document Content Extraction.”* arXiv:2409.18839.
-  © Shanghai AI Laboratory. License: **AGPL-3.0** (recent releases have changed it — check the
+  © Shanghai AI Laboratory. License: **AGPL-3.0** (recent releases have changed it: check the
   upstream `LICENSE`; the copyleft terms matter if you redistribute a bundled server).
-- **Tesseract** — Ray Smith (2007), *“An Overview of the Tesseract OCR Engine,”* Proc. 9th
+- **Tesseract**: Ray Smith (2007), *“An Overview of the Tesseract OCR Engine,”* Proc. 9th
   Int. Conf. on Document Analysis and Recognition (ICDAR), pp. 629–633. Apache-2.0.
 
 **Libraries & infrastructure**
 
-- **pi** — the coding agent this package extends: [`@earendil-works/pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent).
-- **sqlite-vec** — Alex Garcia ([asg017/sqlite-vec](https://github.com/asg017/sqlite-vec)), MIT / Apache-2.0.
-- **pdf.js** — Mozilla ([pdfjs-dist](https://github.com/mozilla/pdf.js)), Apache-2.0.
-- **@napi-rs/canvas** — PDF page rendering to PNG (MIT).
-- **Semantic Scholar API**, **Crossref**, **Unpaywall** — academic metadata and open-access PDF
+- **pi**: the coding agent this package extends: [`@earendil-works/pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent).
+- **sqlite-vec**: Alex Garcia ([asg017/sqlite-vec](https://github.com/asg017/sqlite-vec)), MIT / Apache-2.0.
+- **pdf.js**: Mozilla ([pdfjs-dist](https://github.com/mozilla/pdf.js)), Apache-2.0.
+- **@napi-rs/canvas**: PDF page rendering to PNG (MIT).
+- **Semantic Scholar API**, **Crossref**, **Unpaywall**: academic metadata and open-access PDF
   resolution for the deep-research tools.
 
 **Benchmark & demo corpus**
 
-- **SciFact** — David Wadden, Shanchuan Lin, Kyle Lo, Lucy Lu Wang, Madeleine van Zuylen,
+- **SciFact**: David Wadden, Shanchuan Lin, Kyle Lo, Lucy Lu Wang, Madeleine van Zuylen,
   Arman Cohan, Hannaneh Hajishirzi. *“Fact or Fiction: Verifying Scientific Claims.”* EMNLP 2020,
   arXiv:2004.14974. (Retrieval benchmark, used via BEIR.)
-- **Demo corpus** — Hans Petter Langtangen & Svein Linge, *“Finite Difference Computing with
+- **Demo corpus**: Hans Petter Langtangen & Svein Linge, *“Finite Difference Computing with
   PDEs,”* Springer 2017, CC BY 4.0 (downloaded by `fetch-corpus.sh`, not bundled).
 
 ## Future directions
 
 Today retrieval is *flat*: it ranks chunks by vector + keyword similarity. The roadmap is
-**graph-RAG** — a knowledge graph built over your corpus, so a query can follow *relations*
+**graph-RAG**: a knowledge graph built over your corpus, so a query can follow *relations*
 (entities, concepts, citations, "what builds on what") rather than only matching passages.
 
 - **A local-LLM generated knowledge graph.** Entities and relations are extracted by an LLM on
-  your own machine — nothing leaves it — and stored alongside the embeddings, so one corpus serves
+  your own machine: nothing leaves it, and stored alongside the embeddings, so one corpus serves
   both flat retrieval and graph traversal.
 - **The open problem: extracting meaningful relations from books in a timely manner.** Books are
   long, dense, and cross-referential; naïvely prompting an LLM for relations is too slow and too
-  costly at library scale. Finding a way to extract relations that are actually *meaningful* — not
-  noisy — within a practical time and cost budget is the active research focus, and the biggest
+  costly at library scale. Finding a way to extract relations that are actually *meaningful*, not
+  noisy: within a practical time and cost budget is the active research focus, and the biggest
   lever for retrieval quality.
 
-If you want to help push this forward — relation extraction over books, graph construction, or
-graph-RAG retrieval — please open an issue on this repository.
+If you want to help push this forward: relation extraction over books, graph construction, or
+graph-RAG retrieval: please open an issue on this repository.
 
 ## License
 
-Apache-2.0. (The demo corpus is CC BY 4.0 and is *not* bundled — `fetch-corpus.sh` downloads it.
-Do not substitute the UDL edition, which is CC BY-NC-ND.)
+Apache-2.0. (The demo corpus is CC BY 4.0 and is *not* bundled: `fetch-corpus.sh` downloads it.
+Do not substitute *Understanding Deep Learning* (Prince), which is CC BY-NC-ND.)
