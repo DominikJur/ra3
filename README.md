@@ -31,6 +31,34 @@ in one SQLite file (`sqlite-vec`). Documents are chunked locally; scanned PDFs a
 pluggable server (MinerU for math/layout, Tesseract for plain text). The only out-of-process
 compute is an embedding server you run yourself — CPU or GPU, or rented — see `server/`.
 
+## A small addition to pi
+
+RA³ is not a fork or rewrite of pi — it's a focused set of **open-source contributions on top of
+pi**, in the spirit of pi's minimal design. It adds **9 tools, 2 skills, and one policy file**,
+measured at **≈2.1k tokens** (down from ≈3.4k before tightening):
+
+[![system prompt footprint](docs/system-prompt-footprint.svg)](docs/system-prompt-footprint.html)
+
+*Click the chart for the interactive (hover) HTML version.*
+
+- **Measured** (`scripts/prompt-footprint.mjs`): 9 tools ≈0.8k + 2 skills + policy ≈1.3k = **≈2.1k tokens**.
+- **Deliberately absent**: no sub-agent swarm, no vendored LLM stack, no instruction wall.
+
+### Token counts — sources
+
+| agent | approx. tokens | source |
+|---|---|---|
+| pi (base) | ~0.9k | measured — `@earendil-works/pi-coding-agent` dist, `core/system-prompt.js` |
+| pi + RA³ | ~3.0k | measured — pi base + RA³ delta (`scripts/prompt-footprint.mjs`) |
+| Claude Code | ~2.9k (base) | [public analysis](https://codewithmukesh.com/blog/anatomy-claude-code-session/) |
+| Cursor | ~10.2k | [WeighMyPrompt](https://weighmyprompt.com/system-prompts/cursor) |
+| Codex | ~13k | [openai/codex issue](https://github.com/openai/codex/issues/19212) |
+| GitHub Copilot CLI | ~20.5k | [copilot-cli issue](https://github.com/github/copilot-cli/issues/2627) |
+
+Full system-prompt sizes vary by version and configuration; the non-RA³ figures are approximations
+quoted from the cited public sources. pi's bar is the base prompt; the external bars are full
+prompts (base + tool definitions).
+
 ## Install
 
 ### 1. Install pi (the agent)

@@ -1,27 +1,20 @@
 ---
 name: book
-description: Local knowledge base over indexed books and papers. Use to index a PDF, book, or paper and then ask questions answered with page citations.
+description: Local knowledge base over indexed books and papers. Index PDFs and ask questions answered with page citations.
 ---
 
 # Book / Document Knowledge Base
 
-## Workflow
-1. **Index once** — `document_index({ source })` where `source` is a local path, URL, DOI, or arXiv id.
-   Indexing is async (queued to the GPU server); the doc becomes searchable only after it is
-   processed — check `document_status`. A book takes minutes, one-time, and persists across sessions.
-2. **Search** — `document_search({ query, k?, docs?, keyword? })`. Returns top-k chunks with `doc`,
-   `page`, `section`, `snippet`. Hybrid (dense + keyword) by default; pass `keyword: false` for
-   dense-only. LaTeX may contain stray spaces — match symbols loosely. Cite returned page numbers.
+1. **Index once** — `document_index({ source })` where `source` is a path, URL, DOI, or arXiv id.
+   Async: it queues and returns immediately; the doc is searchable when the job finishes — check
+   `document_status`.
+2. **Search** — `document_search({ query, k?, docs?, keyword? })` → top-k chunks with `doc`, `page`,
+   `section`, `snippet`. Hybrid by default; `keyword: false` for dense-only. LaTeX may have stray
+   spaces. Cite returned page numbers.
 3. **Read figures/equations** — `pdf_extract({ mode: "render" })`, then `read` the `.png` pages.
-4. **Status** — `document_status()` lists what is indexed.
+4. **Status** — `document_status()` lists indexed docs + the queue.
 
 ## Rules
-- Do **not** re-index the same document; index once, search many times. Use `reindex: true` only to
-  replace a stale copy.
-- Indexing is asynchronous — `document_index` queues the document and returns immediately; it becomes searchable when the background job finishes (large books just take longer). Track progress with `document_status`.
-- Restrict a query to one document with `docs: "slug"` (or `"a,b"` for several).
-- Scanned (image-only) PDFs are OCR'd automatically on index (slow, flagged in the result).
-
-## Storage
-- Per document: `~/pi_research/books/<slug>/` (the raw `paper.pdf` is kept alongside).
-- Global index: `~/pi_research/books/kb.sqlite` — one SQLite file holding docs, chunks, and dense/sparse vectors.
+- Index once, search many times; `reindex: true` only to replace a stale copy.
+- Scanned PDFs are auto-OCR'd on index (slow).
+- Storage: `~/pi_research/books/<slug>/` (raw PDF) + `kb.sqlite` (docs, chunks, vectors).

@@ -1,59 +1,56 @@
 ---
 name: deep-research
-description: Academic deep-research pipeline. Use when the user asks to research a topic, gather literature, or produce a cited report. Coordinates planning, Semantic Scholar search, citation traversal, Unpaywall DOI resolution, and PDF extraction (text + page images).
+description: Academic deep-research pipeline. Use when asked to research a topic, gather literature, or produce a cited report.
 ---
 
 # Deep Research
 
-Run a literature-backed research pipeline end-to-end. Work in these phases and write the final report to `report.md`.
+Run a literature-backed research pipeline end-to-end; write the final report to `report.md`.
 
 ## 1. Plan
-- If `research-plan.md` or `PLAN.md` already exists in the working directory, read it first and use it as the plan.
-- Otherwise, produce a short plan first: the research question, 3–5 sub-questions, candidate search queries per sub-question, source inclusion criteria, and the structure of the final report. You may use `/plan` (plan mode) for this, but a concise inline plan is enough.
+- If `research-plan.md` / `PLAN.md` exists, use it. Else write a short plan: the question, 3–5
+  sub-questions, search queries per sub-question, inclusion criteria, report structure.
 
 ## 2. Gather
-- Call `academic_graph_search` with several **distinct** queries (different phrasings/angles). Record title, abstract, year, authors, citation count, DOI/arXiv id, and open-access PDF link for each result.
-- **Index key papers immediately.** The moment a result looks relevant, call `document_index({ source: "<doi-or-url>" })` to queue it for indexing. Indexing runs in the background — the call returns instantly — so queue papers as soon as you find them rather than batching at the end. Re-submitting the same source re-indexes it (harmless but wasteful for large books).
-- Note non-paper leads as they surface — GitHub repositories, datasets, code, tools, demos — with URLs; they feed the report's *Promising leads* section.
+- `academic_graph_search` with several distinct queries. Record title, abstract, year, authors,
+  citation count, DOI/arXiv id, open-access link.
+- **Queue key papers immediately** with `document_index({ source: "<doi-or-url>" })` — async, so
+  queue as you find them, never batch at the end. Re-submitting re-indexes (wasteful for books).
+- Note non-paper leads (repos, datasets, code, tools) with URLs — for *Promising leads*.
 
 ## 3. Expand
-- For the most relevant papers, call `academic_citations` in both directions (`direction="citations"` = who cites it; `direction="references"` = what it cites) to find related work.
+- `academic_citations` both directions (`citations` = who cites it; `references` = what it cites).
 
-## 4. Deep-read
-For papers that actually matter:
-- `pdf_extract` with `mode="text"` to skim the full text cheaply.
-- `pdf_extract` with `mode="render"` to produce page PNGs, then call the `read` tool on the `.png` files to read figures, tables, and equations. Rendered pages preserve two-column layout exactly, which plain text extraction does not.
-- Prefer `doi` (or arXiv id) over a raw URL so the open-access copy is resolved automatically.
-- Papers are already queued (from Gather/Expand) — do not queue them again. If a paper only proves key *after* deep-reading, queue it then — but never later than the moment you decide it matters. Check `document_status` to see whether a paper you need has finished indexing yet.
+## 4. Deep-read (papers that matter)
+- `pdf_extract({ mode: "text" })` to skim; `mode: "render"` → page PNGs → `read` them for figures,
+  tables, equations (preserves two-column layout).
+- Prefer DOI/arXiv id over raw URL. Don't queue the same paper twice.
 
 ## 5. Synthesize
-- Write the final report to `~/pi_research/<today-YYYY-MM-DD>/<topic-slug>.md` (create the folder if needed).
-  - `~/pi_research/` is the default report root.
-  - Use today's date as a subfolder in `YYYY-MM-DD` format (one folder per research run).
-  - `<topic-slug>` is a short lowercase slug referencing the topic (underscores, e.g. `zernike_mean`).
-- Use inline citations (author, year, DOI or URL) on every claim.
-- State only what the sources say. Do not invent sources or claims. If evidence is thin or conflicting, say so explicitly.
-- End the report with a **`## Promising leads`** section: non-paper leads found during the run — GitHub repos, datasets, code, preprints, tools, demos — each with a one-line description and URL, explicitly flagged as *unverified leads*.
+- Write to `~/pi_research/<YYYY-MM-DD>/<topic-slug>.md`.
+- Inline citations (author, year, DOI/URL) on every claim; state only what sources say; flag thin or
+  conflicting evidence.
+- End with `## Promising leads` — non-paper leads, one line + URL each, flagged *unverified*.
 
-## Mathematics formatting
-Write all mathematics in real LaTeX embedded in the Markdown (it must render in GitHub/VS Code):
-- Inline math in `$...$` (e.g. `$Z_{nm}$`); display math as block equations in `$$ ... $$`.
-- Conventions: scalar variables in italics (`$f$`, `$r$`, `$\theta$`, `$Z_{nm}$`); named functions upright (`\sin`, `\cos`, `\exp`, `\ln`, `\log`, `\operatorname{reconstruct}`); operators upright (`\sum`, `\prod`, `\int`, `\iint`, `\lim`, `\arg\min`); differential `\mathrm{d}`; the imaginary unit `\mathrm{i}` and Euler's number `\mathrm{e}` upright; vectors bold (`\mathbf{v}`); matrices bold upright (`\mathbf{A}`); units upright.
-- Use `\frac`, `\sqrt`, `\left( \right)`, `\partial`, `\langle \rangle`, `\bar{...}`, `\hat{...}`, `^{\circ}`, and proper `_{...}`/`^{...}` sub/superscripts.
-- Never write pseudo-math in plain text or ASCII art (avoid `Z_nm`, `∫∫`, `e^(−imα)`, `(1/K) Σ_k`); always use real LaTeX so the rendered report is unambiguous.
+## Mathematics
+Real LaTeX in the Markdown (must render on GitHub/VS Code):
+- Inline `$...$`, display `$$ ... $$`. Scalars italic; functions/operators upright
+  (`\sin \cos \exp \sum \int \lim`); differential `\mathrm{d}`; vectors `\mathbf{v}`; matrices
+  `\mathbf{A}`; units upright.
+- Use `\frac \sqrt \left(\right) \partial \langle\rangle \bar{} \hat{} ^{\circ}` and proper
+  sub/superscripts. Never ASCII pseudo-math (`Z_nm`, `e^(-imα)`, `(1/K) Σ_k`).
 
-## Tools reference
-- `academic_graph_search(query, limit=5, yearFrom?, yearTo?)`
-- `academic_citations(paperId, direction="citations"|"references", limit=10)`
-- `unpaywall_resolver(doi)` → `{ is_oa, pdf, oa_status, ... }`
-- `pdf_extract(url? | doi?, mode="text"|"render", pages="1-5", dpi=150)`
-- `document_index(source, name?, reindex?)` → queue a PDF/paper for background indexing (returns a job id; watch `document_status` for completion)
-- `document_search(query, k=10, docs?, keyword?)` → hybrid (dense + BM25 + sparse) top-k chunks with page/section/snippet (pass `keyword=false` for dense-only; LaTeX may have stray spaces)
-- `document_status()` → list indexed documents
+## Tools
+- `academic_graph_search(query, limit?, yearFrom?, yearTo?)`
+- `academic_citations(paperId, direction="citations"|"references", limit?)`
+- `unpaywall_resolver(doi)` → `{ is_oa, pdf, ... }`
+- `pdf_extract(url?|doi?, mode="text"|"render", pages?, dpi?)`
+- `document_index(source, name?, reindex?)` → queue for background indexing
+- `document_search(query, k?, docs?, keyword?)` → top-k chunks (keyword=false = dense-only)
+- `document_status()` → indexed docs + queue
 
 ## Notes
-- Search falls back to Crossref automatically when Semantic Scholar is rate-limited. Citation *forward* traversal (who cites a paper) needs `S2_API_KEY`; backward references fall back to Crossref with no key.
-- Unpaywall uses `UNPAYWALL_EMAIL` (set to your real email).
-- Extracted files live under `.deep-research/papers/<slug>/` (`paper.pdf`, `paper.txt`, `page-NN.png`).
-- Text extraction is best-effort reading order. For exact layout, tables, and figures, use the rendered PNGs.
-- The knowledge base lives in `~/pi_research/books/` and is **persistent and evolving**: every paper queued during a run is indexed in the background and stays searchable in later sessions via `document_search`.
+- Semantic Scholar rate limits fall back to Crossref; forward citations need `S2_API_KEY`.
+- Unpaywall uses `UNPAYWALL_EMAIL`.
+- Extracted files: `.deep-research/papers/<slug>/` (`paper.pdf`, `paper.txt`, `page-NN.png`).
+- KB lives in `~/pi_research/books/`; papers indexed in a run stay searchable in later sessions.

@@ -265,6 +265,19 @@ export default function (pi: ExtensionAPI) {
     if (jobQueue.length) void pumpQueue();
   });
 
+  // Re-frame pi's default "expert coding assistant" identity: RA³ is an academic research
+  // assistant, not a software-engineering tool.
+  pi.on("before_agent_start", async (event, _ctx) => {
+    const role =
+      "You are RA³, an academic research assistant operating inside pi, a coding agent harness. " +
+      "You help researchers search, read, cite, and synthesize scholarly books and papers. " +
+      "Ground every answer in retrieved sources, cited by page. You write code only as a means to that end.";
+    const sys = event.systemPrompt.includes("You are an expert coding assistant")
+      ? event.systemPrompt.replace(/You are an expert coding assistant[^.\n]*\./, role)
+      : `${role}\n\n${event.systemPrompt}`;
+    return { systemPrompt: sys };
+  });
+
   pi.registerTool({
     name: "academic_graph_search",
     label: "Academic Search",
@@ -493,12 +506,11 @@ export default function (pi: ExtensionAPI) {
     label: "Index Document",
     renderCall: renderToolCall,
     description:
-      "Index a PDF (local path, URL, DOI, or arXiv id) into the knowledge base. Runs in the BACKGROUND: the call queues the job and returns immediately; the document becomes searchable when the job finishes. Extracts text + chunks locally (pdfjs), embeds dense + learned-sparse via EMBED_BASE_URL; scanned/image PDFs are routed to the MinerU OCR backend when OCR_BASE_URL is set.",
+      "Index a PDF (path, URL, DOI, or arXiv id) into the knowledge base. Runs in the background: queues the job and returns immediately; searchable when it finishes. Text PDFs are extracted locally (pdfjs); scanned PDFs route to MinerU OCR if OCR_BASE_URL is set.",
     promptSnippet: "Index a PDF into the knowledge base (background)",
     promptGuidelines: [
-      "document_index is asynchronous — it queues the job and returns immediately, so you can index several documents and keep working. Watch document_status for progress; a notification fires when each job finishes.",
-      "Queue papers as soon as you find them (don't batch at the end) — they index in the background.",
-      "When a deep-research run deep-reads a key paper, call document_index on its DOI/URL to add it to the KB.",
+      "Asynchronous — queues and returns immediately. Watch document_status for progress.",
+      "Queue papers as soon as you find them (don't batch at the end).",
     ],
     parameters: Type.Object({
       source: Type.String({ description: "Local path, https URL, DOI, or arXiv id of the PDF." }),
@@ -602,11 +614,10 @@ export default function (pi: ExtensionAPI) {
     label: "Export Knowledge Base",
     renderCall: renderToolCall,
     description:
-      "Export the whole knowledge base to a portable single-file SQLite snapshot (optionally gzipped). Lossless — docs, chunks, dense + sparse vectors are copied verbatim, so the snapshot re-imports without re-embedding. Copyable to another machine and re-imported with document_import_kb.",
+      "Export the knowledge base to a portable single-file SQLite snapshot (optionally gzipped). Lossless — docs, chunks, and vectors are copied verbatim, so it re-imports without re-embedding.",
     promptSnippet: "Export the knowledge base to a portable .sqlite file",
     promptGuidelines: [
-      "Append .gz to the destination (or pass gzip=true) to compress; document_import_kb auto-detects .gz.",
-      "The snapshot is the same schema as the live KB — it can also be opened directly for inspection.",
+      "Append .gz (or gzip=true) to compress; document_import_kb auto-detects .gz.",
     ],
     parameters: Type.Object({
       dest: Type.String({ description: "Destination file path (e.g. C:/Users/you/kb-export.sqlite or .../kb-export.sqlite.gz)." }),
@@ -627,11 +638,10 @@ export default function (pi: ExtensionAPI) {
     label: "Import Knowledge Base",
     renderCall: renderToolCall,
     description:
-      "Import documents from a KB snapshot (produced by document_export_kb) into the live knowledge base. Merges by default — slugs already present are skipped; pass replace=true to overwrite them. No re-embedding happens (stored vectors are copied verbatim).",
+      "Import documents from a KB snapshot (from document_export_kb) into the live knowledge base. Merges by default; replace=true overwrites. Vectors are copied verbatim — no re-embedding.",
     promptSnippet: "Import a KB snapshot (.sqlite or .sqlite.gz)",
     promptGuidelines: [
-      "Merging is the default; use replace=true to overwrite docs already in the live KB.",
-      "The source is opened read-only and left untouched.",
+      "Merges by default; replace=true overwrites existing docs.",
     ],
     parameters: Type.Object({
       source: Type.String({ description: "Path to a KB snapshot file (.sqlite or .sqlite.gz)." }),
