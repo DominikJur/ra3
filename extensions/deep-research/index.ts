@@ -7,6 +7,8 @@ import { Text, type Component } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { promises as fs } from "node:fs";
+import { mkdirSync, writeFileSync, renameSync, readFileSync, existsSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   fetchJson,
@@ -143,6 +145,44 @@ let nextJobId = 1;
 let pumping = false;
 let sessionCtx: any = null; // stashed in session_start / first tool call
 
+// Queue state persists to ~/.pi/agent/ra3-queue.json so a pi restart resumes queued work
+// (an in-memory queue would silently drop books on restart).
+const queueFile = path.join(os.homedir(), ".pi", "agent", "ra3-queue.json");
+let restored = false;
+
+function persistQueue(): void {
+  try {
+    const jobs = [...jobsById.values()];
+    const active = jobs.filter((j) => j.status === "queued" || j.status === "processing");
+    const finished = jobs.filter((j) => j.status === "done" || j.status === "error").slice(-20);
+    const toStore = [...active, ...finished];
+    mkdirSync(path.dirname(queueFile), { recursive: true });
+    const tmp = `${queueFile}.tmp`;
+    writeFileSync(tmp, JSON.stringify(toStore, null, 2));
+    renameSync(tmp, queueFile);
+  } catch { /* persistence is best-effort; never break indexing */ }
+}
+
+function restoreQueue(): void {
+  if (restored) return;
+  restored = true;
+  try {
+    if (!existsSync(queueFile)) return;
+    const jobs = JSON.parse(readFileSync(queueFile, "utf8")) as IndexJob[];
+    if (!Array.isArray(jobs)) return;
+    for (const j of jobs) {
+      if (j.status === "processing") {
+        // interrupted by a previous shutdown — retry it
+        j.status = "queued";
+        j.progress = "queued (resumed after restart)";
+      }
+      jobsById.set(j.id, j);
+      if (j.id >= nextJobId) nextJobId = j.id + 1;
+      if (j.status === "queued") jobQueue.push(j);
+    }
+  } catch { /* ignore corrupt/missing queue file */ }
+}
+
 function notify(message: string, level: "info" | "warning" | "error"): void {
   try { sessionCtx?.ui?.notify?.(message, level); } catch { /* no-op in non-TUI modes */ }
 }
@@ -172,6 +212,7 @@ async function pumpQueue(): Promise<void> {
     while (jobQueue.length) {
       const job = jobQueue.shift()!;
       job.status = "processing";
+      persistQueue();
       refreshQueueUi();
       try {
         const result = await indexDoc(
@@ -180,10 +221,12 @@ async function pumpQueue(): Promise<void> {
         );
         job.status = "done";
         job.chunks = result.chunks;
+        persistQueue();
         notify(`${job.label}: indexed ${result.chunks} chunks — searchable now`, "info");
       } catch (e) {
         job.status = "error";
         job.error = (e as Error).message;
+        persistQueue();
         notify(`${job.label}: indexing failed — ${(e as Error).message}`, "error");
       }
       refreshQueueUi();
@@ -209,6 +252,7 @@ function enqueueIndexJob(params: any): IndexJob {
   };
   jobsById.set(job.id, job);
   jobQueue.push(job);
+  persistQueue();
   refreshQueueUi();
   void pumpQueue();
   return job;
@@ -217,6 +261,8 @@ function enqueueIndexJob(params: any): IndexJob {
 export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     sessionCtx = ctx; // stash for background-job notifications + progress UI
+    restoreQueue();
+    if (jobQueue.length) void pumpQueue();
   });
 
   pi.registerTool({

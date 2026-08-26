@@ -33,18 +33,66 @@ compute is an embedding server you run yourself — CPU or GPU, or rented — se
 
 ## Install
 
-1. Install pi, then this package:
-   ```bash
-   pi install git:github.com/DominikJur/ra3
-   ```
-   (or `pi install ./ra3` from a local checkout)
-2. `npm install` (installs the runtime deps: pdfjs, sqlite-vec, canvas).
-3. Point embedding at a server (default `http://localhost:8001`) — a FlagEmbedding BGE-M3 service
-   that answers `POST /embed` with `{dense: [[1024]], sparse: [{term: weight}]}` for
-   `{texts: [...]}`:
-   ```bash
-   export EMBED_BASE_URL=http://localhost:8001
-   ```
+### 1. Install pi (the agent)
+
+```bash
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+# or: curl -fsSL https://pi.dev/install.sh | sh
+```
+
+(Needs Node.js 22.5+ — the knowledge base uses `node:sqlite`.)
+
+### 2. Add a model
+
+RA³ does retrieval; pi does the reasoning. Free options first:
+
+| option | cost | how |
+|---|---|---|
+| **Ollama** (local) | free | `ollama serve`, `ollama pull <model>`, then add the provider to `~/.pi/agent/models.json` (below) |
+| **LM Studio** (local) | free | start LM Studio's local server, add it as a provider in `models.json` |
+| **Google AI Studio** (Gemini) | free tier | grab a `GEMINI_API_KEY`, add the `google-generative-ai` provider |
+| any API (OpenAI / Anthropic / DeepSeek / …) | pay-per-token | save the key with `/login`, pick the model with `/model` |
+
+Local example — add to `~/.pi/agent/models.json`:
+
+```json
+{
+  "providers": {
+    "ollama": {
+      "baseUrl": "http://localhost:11434/v1",
+      "api": "openai-completions",
+      "apiKey": "ollama",
+      "models": [
+        { "id": "llama3.1:8b", "name": "Llama 3.1 8B (local)" }
+      ]
+    }
+  }
+}
+```
+
+The file reloads each time you open `/model` — no restart needed. (`apiKey` is a placeholder Ollama ignores.)
+
+### 3. Recommended extras
+
+```bash
+pi install npm:pi-web-access    # web browser access for the agent
+pi install npm:pi-zentui        # ZentUI components
+```
+
+### 4. Install RA³ — pi does the rest
+
+```bash
+pi install git:github.com/DominikJur/ra3
+```
+
+That one command clones the package, installs all runtime dependencies (pdfjs, sqlite-vec,
+canvas) automatically, and registers the tools + skills — no manual `npm install`.
+
+### 5. Point embedding at a server (the only extra step)
+
+```bash
+export EMBED_BASE_URL=http://localhost:8001
+```
 
 > **One embedding manifold, one build.** The dense vectors in `kb.sqlite` were produced by
 > FlagEmbedding BGE-M3 (fp16). The query embedder must be the **same build** — a different
