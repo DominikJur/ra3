@@ -44,21 +44,32 @@ measured at **≈2.1k tokens** (down from ≈3.4k before tightening):
 - **Measured** (`scripts/prompt-footprint.mjs`): 9 tools ≈0.8k + 2 skills + policy ≈1.3k = **≈2.1k tokens**.
 - **Deliberately absent**: no sub-agent swarm, no vendored LLM stack, no instruction wall.
 
-### Token counts — sources
+### Token counts — sources (full prompt = prompt text + tool definitions)
 
 | agent | approx. tokens | source |
 |---|---|---|
-| pi (base, no tools) | ~0.9k | measured — `@earendil-works/pi-coding-agent` dist, `core/system-prompt.js` |
-| pi + RA³ (base + RA³ tools) | ~3.0k | measured — pi base + RA³ delta (`scripts/prompt-footprint.mjs`) |
-| Claude Code (base, no tools) | ~2.9k | [public analysis](https://codewithmukesh.com/blog/anatomy-claude-code-session/) |
-| Cursor (full prompt) | ~10.2k | [WeighMyPrompt](https://weighmyprompt.com/system-prompts/cursor) |
-| Codex (full prompt) | ~13k | [openai/codex issue](https://github.com/openai/codex/issues/19212) |
-| GitHub Copilot CLI (full prompt) | ~20.5k | [copilot-cli issue](https://github.com/github/copilot-cli/issues/2627) |
+| pi (full) | ~2.5k | base + built-in tools (est.) — `@earendil-works/pi-coding-agent` dist |
+| pi + RA³ (full) | ~4.6k | measured — pi full + RA³ delta ~2.1k (`scripts/prompt-footprint.mjs`) |
+| Cursor | ~10.2k | [WeighMyPrompt](https://weighmyprompt.com/system-prompts/cursor) |
+| Codex | ~13k | [openai/codex issue](https://github.com/openai/codex/issues/19212) |
+| Claude Code | ~18k | ~2.5k prompt + 14–17k tools — [claudecodecamp](https://www.claudecodecamp.com/p/inside-claude-code-s-system-prompt) |
+| GitHub Copilot CLI | ~20.5k | [copilot-cli issue](https://github.com/github/copilot-cli/issues/2627) |
 
-Full system-prompt sizes vary by version and configuration; the non-RA³ figures are approximations
-quoted from the cited public sources. **Base (no tools)** bars exclude tool definitions;
-**full prompt** bars include them — so pi and Claude Code look small partly because their tools
-aren't counted here, while Cursor / Codex / Copilot include theirs.
+All figures are approximations and vary by version/configuration; the non-RA³ numbers are quoted
+from the cited public sources. pi's built-in tool count is estimated.
+
+## The custom prompt (re-framing pi)
+
+Out of the box, pi opens with *"You are an expert coding assistant…"*. RA³ rewrites that opening
+(via pi's `before_agent_start` hook) to:
+
+> You are RA³, an academic research assistant operating inside pi. You help researchers search,
+> read, cite, and synthesize scholarly books and papers. Ground every answer in retrieved sources,
+> cited by page. You write code only as a means to that end.
+
+**Why:** RA³ is a research tool, not a software-engineering tool. The re-frame keeps the agent's
+behavior pointed at literature work — retrieve → cite → synthesize — instead of code generation.
+It's a ~40-token override of pi's role line, not a rewrite of pi's prompt.
 
 ## Install
 
