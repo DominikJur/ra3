@@ -59,9 +59,14 @@ compute is an embedding server you run yourself — CPU or GPU, or rented — se
 ## Quickstart
 
 ```
-document_index({ source: "path/to/book.pdf" })     # index a PDF (local/URL/DOI)
+document_index({ source: "path/to/book.pdf" })     # index a PDF (local/URL/DOI) — queues in the background
 document_search({ query: "bias variance tradeoff" }) # hybrid search, cites (source, page)
+document_status()                                    # indexed docs + background queue progress
 ```
+
+`document_index` is **asynchronous**: it queues the job and returns immediately, so you can index
+several documents at once and keep working — indexing (and OCR) run in the background and a
+notification fires when each job finishes.
 
 Scanned/image PDFs are auto-routed to an optional OCR backend (only when pdfjs text density is
 below ~40 chars/page; text PDFs are extracted fully locally by `lib/ocr.ts`). Two interchangeable

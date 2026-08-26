@@ -118,7 +118,107 @@ async function indexDoc(params: any, progress: (msg: string) => void): Promise<a
   return { slug, source: src, status: "indexed", chunks: n, dir };
 }
 
+// ---- background indexing queue --------------------------------------------
+// document_index returns immediately; the heavy pipeline (resolve → extract → OCR →
+// embed → ingest) runs here, one job at a time, so the TUI stays responsive and several
+// books can be queued while the user keeps working. Progress shows in a widget + footer
+// status; completion/failure fires a notification.
+
+interface IndexJob {
+  id: number;
+  label: string;   // display only (name or filename)
+  name?: string;   // explicit slug passed through to indexDoc
+  source: string;
+  reindex: boolean;
+  status: "queued" | "processing" | "done" | "error";
+  progress: string;
+  chunks?: number;
+  error?: string;
+  queuedAt: number;
+}
+
+const jobQueue: IndexJob[] = [];
+const jobsById = new Map<number, IndexJob>();
+let nextJobId = 1;
+let pumping = false;
+let sessionCtx: any = null; // stashed in session_start / first tool call
+
+function notify(message: string, level: "info" | "warning" | "error"): void {
+  try { sessionCtx?.ui?.notify?.(message, level); } catch { /* no-op in non-TUI modes */ }
+}
+
+function refreshQueueUi(): void {
+  try {
+    if (!sessionCtx?.ui) return;
+    const processing = [...jobsById.values()].filter((j) => j.status === "processing");
+    const queued = [...jobsById.values()].filter((j) => j.status === "queued");
+    const active = [...processing, ...queued];
+    if (!active.length) {
+      sessionCtx.ui.setWidget?.("ra3-kb", undefined);
+      sessionCtx.ui.setStatus?.("ra3-kb", undefined);
+      return;
+    }
+    const lines = active.slice(0, 6).map((j) => `${j.status === "processing" ? "⏳" : "⏱"} ${j.label} — ${j.progress}`);
+    if (active.length > 6) lines.push(`… +${active.length - 6} more`);
+    sessionCtx.ui.setWidget?.("ra3-kb", lines);
+    sessionCtx.ui.setStatus?.("ra3-kb", `indexing ${processing.length} · ${queued.length} queued`);
+  } catch { /* ignore UI errors */ }
+}
+
+async function pumpQueue(): Promise<void> {
+  if (pumping) return;
+  pumping = true;
+  try {
+    while (jobQueue.length) {
+      const job = jobQueue.shift()!;
+      job.status = "processing";
+      refreshQueueUi();
+      try {
+        const result = await indexDoc(
+          { source: job.source, name: job.name, reindex: job.reindex },
+          (msg) => { job.progress = msg; refreshQueueUi(); },
+        );
+        job.status = "done";
+        job.chunks = result.chunks;
+        notify(`${job.label}: indexed ${result.chunks} chunks — searchable now`, "info");
+      } catch (e) {
+        job.status = "error";
+        job.error = (e as Error).message;
+        notify(`${job.label}: indexing failed — ${(e as Error).message}`, "error");
+      }
+      refreshQueueUi();
+    }
+  } finally {
+    pumping = false;
+  }
+}
+
+function enqueueIndexJob(params: any): IndexJob {
+  const src = String(params.source).trim();
+  const name = params.name ? String(params.name) : undefined;
+  const label = name ?? (src.split(/[\\/]/).pop()?.replace(/\.pdf$/i, "") || src);
+  const job: IndexJob = {
+    id: nextJobId++,
+    label,
+    name,
+    source: src,
+    reindex: !!params.reindex,
+    status: "queued",
+    progress: "queued",
+    queuedAt: Date.now(),
+  };
+  jobsById.set(job.id, job);
+  jobQueue.push(job);
+  refreshQueueUi();
+  void pumpQueue();
+  return job;
+}
+
 export default function (pi: ExtensionAPI) {
+  pi.on("session_start", async (_event, ctx) => {
+    sessionCtx = ctx; // stash for background-job notifications + progress UI
+  });
+
   pi.registerTool({
     name: "academic_graph_search",
     label: "Academic Search",
@@ -347,34 +447,30 @@ export default function (pi: ExtensionAPI) {
     label: "Index Document",
     renderCall: renderToolCall,
     description:
-      "Index a PDF (local path, URL, DOI, or arXiv id) into the knowledge base. Extracts text + chunks locally (pdfjs), embeds dense + learned-sparse via EMBED_BASE_URL, and makes it searchable immediately. Scanned/image PDFs are routed to the MinerU OCR backend when OCR_BASE_URL is set.",
-    promptSnippet: "Index a PDF into the knowledge base",
+      "Index a PDF (local path, URL, DOI, or arXiv id) into the knowledge base. Runs in the BACKGROUND: the call queues the job and returns immediately; the document becomes searchable when the job finishes. Extracts text + chunks locally (pdfjs), embeds dense + learned-sparse via EMBED_BASE_URL; scanned/image PDFs are routed to the MinerU OCR backend when OCR_BASE_URL is set.",
+    promptSnippet: "Index a PDF into the knowledge base (background)",
     promptGuidelines: [
-      "document_index is synchronous — the doc is searchable as soon as it returns. Use reindex=true to replace an existing doc.",
+      "document_index is asynchronous — it queues the job and returns immediately, so you can index several documents and keep working. Watch document_status for progress; a notification fires when each job finishes.",
+      "Queue papers as soon as you find them (don't batch at the end) — they index in the background.",
       "When a deep-research run deep-reads a key paper, call document_index on its DOI/URL to add it to the KB.",
     ],
     parameters: Type.Object({
       source: Type.String({ description: "Local path, https URL, DOI, or arXiv id of the PDF." }),
       name: Type.Optional(Type.String({ description: "Optional slug/name for the document (defaults to filename/DOI)." })),
       reindex: Type.Optional(Type.Boolean({ description: "Replace any existing chunks for this document (default false)." })),
-      background: Type.Optional(Type.Boolean({ description: "Ignored (indexing is synchronous)." })),
+      background: Type.Optional(Type.Boolean({ description: "Deprecated — indexing always runs in the background." })),
     }),
-    async execute(_id: string, params: any, _signal?: AbortSignal, onUpdate?: any, _ctx?: any) {
+    async execute(_id: string, params: any, _signal?: AbortSignal, _onUpdate?: any, ctx?: any) {
       try {
-        const result = await indexDoc(params, (m) => onUpdate?.({ content: [{ type: "text", text: m }] }));
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                { ...result, note: "Indexed — searchable immediately via document_search." },
-                null,
-                2,
-              ),
-            },
-          ],
-          details: result,
+        if (ctx) sessionCtx = ctx;
+        const job = enqueueIndexJob(params);
+        const result = {
+          status: "queued",
+          job_id: job.id,
+          label: job.label,
+          note: "Indexing runs in the background — you can keep working and queue more documents. Track progress with document_status; a notification fires when the job finishes.",
         };
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
       } catch (e) {
         return toolError(`document_index failed: ${(e as Error).message}`);
       }
@@ -426,15 +522,28 @@ export default function (pi: ExtensionAPI) {
     name: "document_status",
     label: "Knowledge Base Status",
     renderCall: renderToolCall,
-    description: "List documents in the knowledge base (indexed and searchable).",
-    promptSnippet: "List indexed documents",
+    description: "List indexed documents plus any background indexing jobs (queued / processing / recently finished).",
+    promptSnippet: "List indexed documents + indexing queue",
     parameters: Type.Object({}),
-    async execute() {
+    async execute(_id: string, _params: any, _signal?: AbortSignal, _onUpdate?: any, ctx?: any) {
       try {
+        if (ctx) sessionCtx = ctx;
         const docs = await listDocuments();
+        const queue = [...jobsById.values()]
+          .filter((j) => j.status === "queued" || j.status === "processing")
+          .map((j) => ({ job_id: j.id, label: j.label, source: j.source, status: j.status, progress: j.progress }));
+        const recent = [...jobsById.values()]
+          .filter((j) => j.status === "done" || j.status === "error")
+          .slice(-5)
+          .map((j) => ({ job_id: j.id, label: j.label, status: j.status, chunks: j.chunks, error: j.error }));
+        const payload = { docs, queue, recent };
+        const head = [
+          `${docs.length} indexed document(s)`,
+          queue.length ? `${queue.length} job(s) in the background queue` : "No indexing jobs in queue",
+        ].join("\n");
         return {
-          content: [{ type: "text", text: docs.length ? JSON.stringify(docs, null, 2) : "Knowledge base is empty. Use document_index to add a PDF." }],
-          details: { docs },
+          content: [{ type: "text", text: `${head}\n${JSON.stringify(payload, null, 2)}` }],
+          details: payload,
         };
       } catch (e) {
         return toolError(`document_status failed: ${(e as Error).message}`);

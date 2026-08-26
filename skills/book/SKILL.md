@@ -18,7 +18,7 @@ description: Local knowledge base over indexed books and papers. Use to index a 
 ## Rules
 - Do **not** re-index the same document; index once, search many times. Use `reindex: true` only to
   replace a stale copy.
-- Indexing is synchronous — `document_index` returns once the document is searchable (large books just take longer). There is no background queue.
+- Indexing is asynchronous — `document_index` queues the document and returns immediately; it becomes searchable when the background job finishes (large books just take longer). Track progress with `document_status`.
 - Restrict a query to one document with `docs: "slug"` (or `"a,b"` for several).
 - Scanned (image-only) PDFs are OCR'd automatically on index (slow, flagged in the result).
 
