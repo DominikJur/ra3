@@ -48,16 +48,17 @@ measured at **≈2.1k tokens** (down from ≈3.4k before tightening):
 
 | agent | approx. tokens | source |
 |---|---|---|
-| pi (base) | ~0.9k | measured — `@earendil-works/pi-coding-agent` dist, `core/system-prompt.js` |
-| pi + RA³ | ~3.0k | measured — pi base + RA³ delta (`scripts/prompt-footprint.mjs`) |
-| Claude Code | ~2.9k (base) | [public analysis](https://codewithmukesh.com/blog/anatomy-claude-code-session/) |
-| Cursor | ~10.2k | [WeighMyPrompt](https://weighmyprompt.com/system-prompts/cursor) |
-| Codex | ~13k | [openai/codex issue](https://github.com/openai/codex/issues/19212) |
-| GitHub Copilot CLI | ~20.5k | [copilot-cli issue](https://github.com/github/copilot-cli/issues/2627) |
+| pi (base, no tools) | ~0.9k | measured — `@earendil-works/pi-coding-agent` dist, `core/system-prompt.js` |
+| pi + RA³ (base + RA³ tools) | ~3.0k | measured — pi base + RA³ delta (`scripts/prompt-footprint.mjs`) |
+| Claude Code (base, no tools) | ~2.9k | [public analysis](https://codewithmukesh.com/blog/anatomy-claude-code-session/) |
+| Cursor (full prompt) | ~10.2k | [WeighMyPrompt](https://weighmyprompt.com/system-prompts/cursor) |
+| Codex (full prompt) | ~13k | [openai/codex issue](https://github.com/openai/codex/issues/19212) |
+| GitHub Copilot CLI (full prompt) | ~20.5k | [copilot-cli issue](https://github.com/github/copilot-cli/issues/2627) |
 
 Full system-prompt sizes vary by version and configuration; the non-RA³ figures are approximations
-quoted from the cited public sources. pi's bar is the base prompt; the external bars are full
-prompts (base + tool definitions).
+quoted from the cited public sources. **Base (no tools)** bars exclude tool definitions;
+**full prompt** bars include them — so pi and Claude Code look small partly because their tools
+aren't counted here, while Cursor / Codex / Copilot include theirs.
 
 ## Install
 

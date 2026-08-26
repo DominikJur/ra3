@@ -13,12 +13,12 @@ import os
 import plotly.graph_objects as go
 
 entries = [
-    ("pi (base)",         900,  "measured — pi dist base prompt",          "#9a9a9a"),
-    ("pi + RA³",         2995,  "measured — pi base + RA³ (~2.1k delta)",  "#3f9b3f"),
-    ("Claude Code",      2900,  "~2.9k base (public analysis)",             "#c05621"),
-    ("Cursor",          10200,  "~10.2k full prompt (WeighMyPrompt)",       "#c05621"),
-    ("Codex",           13000,  "~13k full prompt (user-reported)",         "#c05621"),
-    ("GitHub Copilot",  20500,  "~20.5k full prompt (issue #2627)",         "#c05621"),
+    ("pi (base, no tools)",           900,  "measured — pi dist base prompt",          "#9a9a9a"),
+    ("pi + RA³ (base + RA³ tools)",   2995,  "measured — pi base + RA³ (~2.1k delta)",  "#3f9b3f"),
+    ("Claude Code (base, no tools)",  2900,  "~2.9k base (public analysis)",             "#c05621"),
+    ("Cursor (full prompt)",         10200,  "~10.2k full prompt (WeighMyPrompt)",       "#c05621"),
+    ("Codex (full prompt)",          13000,  "~13k full prompt (user-reported)",         "#c05621"),
+    ("GitHub Copilot (full prompt)", 20500,  "~20.5k full prompt (issue #2627)",         "#c05621"),
 ]
 
 entries.sort(key=lambda e: e[1])
