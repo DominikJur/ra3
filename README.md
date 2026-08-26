@@ -198,6 +198,24 @@ Everything this package builds on is cited here.
 - **Demo corpus** — Hans Petter Langtangen & Svein Linge, *“Finite Difference Computing with
   PDEs,”* Springer 2017, CC BY 4.0 (downloaded by `fetch-corpus.sh`, not bundled).
 
+## Future directions
+
+Today retrieval is *flat*: it ranks chunks by vector + keyword similarity. The roadmap is
+**graph-RAG** — a knowledge graph built over your corpus, so a query can follow *relations*
+(entities, concepts, citations, "what builds on what") rather than only matching passages.
+
+- **A local, LLM-generated knowledge graph.** Entities and relations are extracted by an LLM on
+  your own machine — nothing leaves it — and stored alongside the embeddings, so one corpus serves
+  both flat retrieval and graph traversal.
+- **The open problem: extracting meaningful relations from books in a timely manner.** Books are
+  long, dense, and cross-referential; naïvely prompting an LLM for relations is too slow and too
+  costly at library scale. Finding a way to extract relations that are actually *meaningful* — not
+  noisy — within a practical time and cost budget is the active research focus, and the biggest
+  lever for retrieval quality.
+
+If you want to help push this forward — relation extraction over books, graph construction, or
+graph-RAG retrieval — please open an issue on this repository.
+
 ## License
 
 Apache-2.0. (The demo corpus is CC BY 4.0 and is *not* bundled — `fetch-corpus.sh` downloads it.
