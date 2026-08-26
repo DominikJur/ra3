@@ -1,14 +1,32 @@
 # RA³ — Retrieval-Augmented Academic Agent
 
-A local, private knowledge base + academic deep-research pipeline for books and papers.
+Ask questions of your books and papers — and get answers grounded in the text, with page
+citations, that you can verify yourself.
 
-- **Hybrid retrieval** — BGE-M3 dense (1024-d) + BM25 + learned-sparse (BGE-M3 lexical), fused with
-  reciprocal-rank fusion + a dense-MMR diversity pass. One dense vector + one sparse vector per
-  chunk: no ColBERT-sized storage.
-- **Deep research** — Semantic Scholar search, citation traversal, Unpaywall PDF resolution, and
-  page-image extraction.
-- **Private by default** — your documents stay on your machine. All heavy compute (embedding,
-  OCR for scanned PDFs) is a pluggable self-hosted service reached by URL.
+## What it does
+
+RA³ turns your PDFs into a private, searchable knowledge base that your agent cites instead of
+guessing. Built for researchers who need answers that trace to specific passages — not
+plausible-sounding prose.
+
+- **Cited, verifiable answers.** Every claim is backed by a retrieved passage and cited as
+  `(source, page)`, so you can flip to the page and check it.
+- **Your literature stays private.** Documents never leave your machine. No cloud accounts, no
+  corpus uploads.
+- **A complete research loop.** Discover papers (Semantic Scholar, citation traversal, open-access
+  PDF resolution), read them (text + page images, OCR for scans), index them, and query the result.
+- **Retrieval you can rely on.** Zero-shot SciFact nDCG@10 of 0.70 — on par with SPLADE, ahead of
+  ColBERT and Contriever — so the passages it cites are the right ones.
+- **Bring your own model.** RA³ does retrieval; pair it with whichever LLM you run (local or
+  hosted). No vendor lock-in.
+
+## How it works
+
+Retrieval fuses three complementary signals — BGE-M3 dense embeddings, BM25 keyword match, and
+BGE-M3 learned-sparse weights — via reciprocal-rank fusion and a diversity reranking pass, stored
+in one SQLite file (`sqlite-vec`). Documents are chunked locally; scanned PDFs are OCR'd by a
+pluggable server (MinerU for math/layout, Tesseract for plain text). The only out-of-process
+compute is an embedding server you run yourself — CPU or GPU, or rented — see `server/`.
 
 ## Install
 
