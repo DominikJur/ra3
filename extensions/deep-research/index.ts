@@ -104,6 +104,22 @@ async function resolveSource(
   return { buf, slug: slug || 'document', label: s };
 }
 
+// Health probe returns the OCR server's name (for per-doc provenance): the /health
+// contract is {"ok":true,"ocr":"marker/surya-2"} or {"ocr":"tesseract"}. Best-effort.
+async function ocrServerName(baseUrl: string): Promise<string> {
+  try {
+    const r = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(4000) });
+    if (!r.ok) return 'ocr';
+    const d = await r.json();
+    const s = String(d?.ocr ?? '').toLowerCase();
+    if (s.includes('marker') || s.includes('surya')) return 'marker';
+    if (s.includes('tesseract')) return 'tesseract';
+    return 'ocr';
+  } catch {
+    return 'ocr';
+  }
+}
+
 async function indexDoc(params: any, progress: (msg: string) => void): Promise<any> {
   progress(`Resolving source: ${params.source}`);
   const src = String(params.source).trim();
@@ -131,11 +147,13 @@ async function indexDoc(params: any, progress: (msg: string) => void): Promise<a
 
   let sections: { heading: string; page: number; text: string }[] | null = null;
   let pageCount = 0;
+  let ocrLabel = 'pdfjs'; // provenance: which OCR produced the text (if any)
   if (existsSync(cpFile)) {
     try {
       const cp = JSON.parse(await fs.readFile(cpFile, 'utf8'));
       sections = cp.sections as { heading: string; page: number; text: string }[];
       pageCount = Number(cp.pageCount) || 0;
+      ocrLabel = String(cp.ocr ?? 'ocr');
       progress(`Using cached OCR result (${pageCount} pages, ${sections.length} sections)`);
     } catch {
       /* corrupted checkpoint: redo extraction below */
@@ -157,8 +175,9 @@ async function indexDoc(params: any, progress: (msg: string) => void): Promise<a
         progress(
           `OCR complete: ${pageCount} pages, ${sections.reduce((a, s) => a + s.text.length, 0)} chars`,
         );
+        ocrLabel = await ocrServerName(ocrUrl);
         try {
-          await fs.writeFile(cpFile, JSON.stringify({ pageCount, sections }));
+          await fs.writeFile(cpFile, JSON.stringify({ pageCount, sections, ocr: ocrLabel }));
         } catch {
           /* best effort */
         }
@@ -181,7 +200,7 @@ async function indexDoc(params: any, progress: (msg: string) => void): Promise<a
   const { dense, sparse } = await embedTexts(chunks.map((c) => c.text));
 
   progress(`Ingesting ${chunks.length} chunks...`);
-  const n = ingestChunks({ slug, source: src, pages: pageCount, chunks, dense, sparse });
+  const n = ingestChunks({ slug, source: src, pages: pageCount, chunks, dense, sparse, ocr: ocrLabel });
 
   // Success: drop the OCR checkpoint (a later re-index should produce fresh OCR).
   try {

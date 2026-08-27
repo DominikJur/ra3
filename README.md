@@ -246,6 +246,9 @@ and its grounded answer live in `demo/README.md` and `demo/answer.md`.
   `academic_graph_search`, `academic_citations`, `unpaywall_resolver`, `pdf_extract`).
   `lib/kb-sqlite.ts` is the KB engine.
 - `export-kb.mjs` / `import-kb.mjs`: standalone CLI wrappers for KB snapshot/merge.
+- `kb-state.mjs`: KB viewer — `node kb-state.mjs` lists every document with its real title,
+  embedding model, OCR method and sizes; `node kb-state.mjs <index|slug>` shows full metadata
+  (source, chunk spread, sections, provenance).
 - `server/`: reference compute servers: `embed/` (FlagEmbedding BGE-M3), `ocr/` (Marker 2 / Surya 2),
   `ocr-light/` (Tesseract). See `server/README.md`.
 - `skills/book/` + `skills/deep-research/`: the workflow instructions.

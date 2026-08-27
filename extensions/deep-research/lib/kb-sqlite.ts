@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS docs (
   hash TEXT NOT NULL DEFAULT '',
   model TEXT NOT NULL DEFAULT 'bge-m3',
   dim INTEGER NOT NULL DEFAULT 1024,
+  ocr TEXT NOT NULL DEFAULT 'unknown',
   lang TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -77,6 +78,8 @@ export function getDb(): DatabaseSync {
     throw new Error(`sqlite-vec failed to load (run: npm i sqlite-vec): ${(e as Error).message}`);
   }
   db.exec(SCHEMA);
+  // migration: OCR provenance column for KBs created before it existed
+  try { db.exec("ALTER TABLE docs ADD COLUMN ocr TEXT NOT NULL DEFAULT 'unknown'"); } catch { /* already present */ }
   return db;
 }
 
@@ -132,6 +135,7 @@ export function ingestChunks(opts: {
   chunks: Array<{ page: number; section: string; text: string }>;
   dense: Float32Array[];
   sparse: Map<string, number>[];
+  ocr?: string; // 'marker' | 'tesseract' | 'pdfjs' | 'unknown'
 }): number {
   const d = getDb();
   const oldIds = (
@@ -147,7 +151,7 @@ export function ingestChunks(opts: {
     d.prepare('DELETE FROM chunks WHERE doc = ?').run(opts.slug);
     d.prepare('DELETE FROM docs WHERE slug = ?').run(opts.slug);
     d.prepare(
-      'INSERT INTO docs (slug, source, pages, chunks, hash, model, dim, lang) VALUES (?,?,?,?,?,?,?,?)',
+      'INSERT INTO docs (slug, source, pages, chunks, hash, model, dim, lang, ocr) VALUES (?,?,?,?,?,?,?,?,?)',
     ).run(
       opts.slug,
       opts.source,
@@ -157,6 +161,7 @@ export function ingestChunks(opts: {
       'bge-m3',
       DIM,
       null,
+      opts.ocr ?? 'unknown',
     );
     const ins = d.prepare('INSERT INTO chunks (doc, page, section, text) VALUES (?,?,?,?)');
     const insVec = d.prepare('INSERT INTO vec_chunks (chunk_id, embedding) VALUES (?,?)');
@@ -624,7 +629,7 @@ export function listDocuments(): any[] {
   const d = getDb();
   const map = new Map<string, any>();
   for (const doc of d
-    .prepare('SELECT slug, source, pages, chunks, model, created_at FROM docs ORDER BY slug')
+    .prepare('SELECT slug, source, pages, chunks, model, dim, ocr, created_at FROM docs ORDER BY slug')
     .all() as any[]) {
     map.set(doc.slug, {
       slug: doc.slug,
@@ -632,6 +637,8 @@ export function listDocuments(): any[] {
       pages: Number(doc.pages),
       chunks: Number(doc.chunks),
       model: doc.model,
+      dim: Number(doc.dim),
+      ocr: doc.ocr ?? 'unknown',
       createdAt: doc.created_at,
       status: 'indexed',
     });
