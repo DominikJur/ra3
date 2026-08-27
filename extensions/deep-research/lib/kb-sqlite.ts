@@ -489,6 +489,17 @@ export function listDocuments(): any[] {
   return [...map.values()];
 }
 
+// Full text of one page (chunks concatenated in order). document_search returns short
+// snippets; this returns the whole page so exact equations/derivations can be quoted.
+export function getPageText(slug: string, page: number): { text: string; chunks: number; section: string } | null {
+  const d = getDb();
+  const rows = d.prepare("SELECT section, text FROM chunks WHERE doc = ? AND page = ? ORDER BY chunk_id").all(slug, Number(page)) as any[];
+  if (!rows.length) return null;
+  const section = rows[0].section ? String(rows[0].section) : "";
+  const text = rows.map((r) => String(r.text ?? "")).join("\n\n").trim();
+  return { text, chunks: rows.length, section };
+}
+
 // ---- export / import ------------------------------------------------------
 
 // Snapshot the whole KB to a single portable SQLite file: lossless: docs + chunks +

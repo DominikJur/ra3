@@ -11,7 +11,7 @@ description: Local knowledge base over indexed books and papers. Index PDFs and 
 2. **Search**: `document_search({ query, k?, docs?, keyword? })` → top-k chunks with `doc`, `page`,
    `section`, `snippet`. Hybrid by default; `keyword: false` for dense-only. LaTeX may have stray
    spaces. Cite returned page numbers.
-3. **Read figures/equations**: `pdf_extract({ mode: "render" })`, then `read` the `.png` pages.
+3. **Read full pages** — `document_page({ doc, page })` returns a page's full text when a search snippet isn't enough (e.g. to quote an exact equation or derivation).
 4. **Status**: `document_status()` lists indexed docs + the queue.
 
 ## Rules

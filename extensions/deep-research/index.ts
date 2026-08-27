@@ -25,7 +25,7 @@ import {
   type Json,
 } from "./lib/shared.ts";
 import { extractPdf, renderPages, chunkSections } from "./lib/chunk.ts";
-import { embedTexts, ingestChunks, searchDocuments, listDocuments, exportKb, importKb, docDir } from "./lib/kb-sqlite.ts";
+import { embedTexts, ingestChunks, searchDocuments, listDocuments, exportKb, importKb, docDir, getPageText } from "./lib/kb-sqlite.ts";
 import { ocrBaseUrl, isScannedPdf, ocrPdf } from "./lib/ocr.ts";
 
 // Render a tool call's input arguments in the TUI. Without a renderCall, pi
@@ -611,6 +611,33 @@ export default function (pi: ExtensionAPI) {
         };
       } catch (e) {
         return toolError(`document_status failed: ${(e as Error).message}`);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "document_page",
+    label: "Read KB Page",
+    renderCall: renderToolCall,
+    description:
+      "Return the full text of one page of an indexed document, by slug + page number. document_search returns short snippets only; use this when you need the exact equation, derivation, or full paragraph on a page.",
+    promptSnippet: "Read a full page of an indexed document",
+    promptGuidelines: [
+      "Use document_page when a document_search snippet isn't enough (exact formula or derivation needed). Pass the slug + page number from document_search.",
+      "Page numbers are the KB/PDF page number, which may be offset from the book's printed page numbers.",
+    ],
+    parameters: Type.Object({
+      doc: Type.String({ description: "Document slug (from document_search / document_status)." }),
+      page: Type.Number({ description: "Page number as stored in the KB." }),
+    }),
+    async execute(_id: string, params: any) {
+      try {
+        const page = getPageText(String(params.doc), Number(params.page));
+        if (!page) return toolError(`document_page: no chunks for doc '${params.doc}' page ${params.page}.`);
+        const result = { doc: params.doc, page: Number(params.page), section: page.section, text: page.text };
+        return { content: [{ type: "text", text: page.text }], details: result };
+      } catch (e) {
+        return toolError(`document_page failed: ${(e as Error).message}`);
       }
     },
   });

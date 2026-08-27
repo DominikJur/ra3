@@ -47,6 +47,7 @@ Real LaTeX in the Markdown (must render on GitHub/VS Code):
 - `pdf_extract(url?|doi?, mode="text"|"render", pages?, dpi?)`
 - `document_index(source, name?, reindex?)` → queue for background indexing
 - `document_search(query, k?, docs?, keyword?)` → top-k chunks (keyword=false = dense-only)
+- `document_page(doc, page)` → full text of one page (for exact equations/derivations)
 - `document_status()` → indexed docs + queue
 
 ## Notes
