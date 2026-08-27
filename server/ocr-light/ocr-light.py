@@ -24,13 +24,21 @@ from fastapi import FastAPI, File, UploadFile
 app = FastAPI()
 
 OCR_DPI = int(os.environ.get("OCR_DPI", "300"))
-OCR_PSM = os.environ.get("OCR_PSM", "3")       # 3 = fully automatic page segmentation
-OCR_LANG = os.environ.get("OCR_LANG", "eng")   # tesseract language pack (must be installed)
+OCR_PSM = os.environ.get("OCR_PSM", "3")  # 3 = fully automatic page segmentation
+OCR_LANG = os.environ.get(
+    "OCR_LANG", "eng"
+)  # tesseract language pack (must be installed)
+
 
 @app.get("/health")
 def health():
-    return {"ok": True, "ocr": "tesseract", "lang": OCR_LANG,
-            "note": "text-only OCR; no math/table/layout fidelity"}
+    return {
+        "ok": True,
+        "ocr": "tesseract",
+        "lang": OCR_LANG,
+        "note": "text-only OCR; no math/table/layout fidelity",
+    }
+
 
 def rasterize_ocr(pdf_bytes: bytes) -> str:
     doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
@@ -38,11 +46,14 @@ def rasterize_ocr(pdf_bytes: bytes) -> str:
     for i, page in enumerate(doc):
         pix = page.get_pixmap(dpi=OCR_DPI)
         img = Image.open(io.BytesIO(pix.tobytes("png")))
-        text = pytesseract.image_to_string(img, config=f"--oem 3 --psm {OCR_PSM} -l {OCR_LANG}").strip()
+        text = pytesseract.image_to_string(
+            img, config=f"--oem 3 --psm {OCR_PSM} -l {OCR_LANG}"
+        ).strip()
         # Page marker matches the format lib/ocr.ts splits on (<!-- page N -->).
         parts.append(f"<!-- page {i + 1} -->\n\n{text}")
     doc.close()
     return "\n\n".join(parts)
+
 
 @app.post("/file_parse")
 async def file_parse(files: list[UploadFile] = File(...)):
@@ -55,7 +66,9 @@ async def file_parse(files: list[UploadFile] = File(...)):
         out[stem] = {"md_content": rasterize_ocr(data)}
     return {"results": out}
 
+
 if __name__ == "__main__":
     import uvicorn
+
     # 127.0.0.1 by default (safe, tunnel to reach it); OCR_HOST=0.0.0.0 to expose on a box.
     uvicorn.run(app, host=os.environ.get("OCR_HOST", "127.0.0.1"), port=8002)

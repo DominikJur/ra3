@@ -31,7 +31,9 @@ app = FastAPI()
 
 # marker_single lives in the same venv as this server; resolve it explicitly so
 # PATH doesn't matter.
-MARKER_BIN = os.environ.get("MARKER_BIN") or os.path.join(os.path.dirname(sys.executable), "marker_single")
+MARKER_BIN = os.environ.get("MARKER_BIN") or os.path.join(
+    os.path.dirname(sys.executable), "marker_single"
+)
 JOBS_DIR = os.environ.get("OCR_JOBS_DIR", os.path.expanduser("~/.ocr-jobs"))
 os.makedirs(JOBS_DIR, exist_ok=True)
 JOB_LOCK = threading.Lock()  # serialize marker runs: one GPU job at a time
@@ -40,16 +42,21 @@ OCR_TIMEOUT = int(os.environ.get("OCR_TIMEOUT", "7200"))  # seconds per file
 
 ENV = {
     **os.environ,
-    "SURYA_INFERENCE_URL": os.environ.get("SURYA_INFERENCE_URL", "http://127.0.0.1:8000/v1"),
+    "SURYA_INFERENCE_URL": os.environ.get(
+        "SURYA_INFERENCE_URL", "http://127.0.0.1:8000/v1"
+    ),
     "SURYA_INFERENCE_BACKEND": os.environ.get("SURYA_INFERENCE_BACKEND", "vllm"),
     "SURYA_INFERENCE_KEEP_ALIVE": "1",
 }
+
 
 @app.get("/health")
 def health():
     return {"ok": True, "ocr": "marker/surya-2"}
 
+
 # ---- per-page markdown reconstruction from Marker's JSON block tree -------
+
 
 def _leaf_md(html: str) -> str:
     """Convert one content node's html fragment to markdown text."""
@@ -64,7 +71,12 @@ def _leaf_md(html: str) -> str:
         flags=re.S,
     )
     # inline math: <math>\LaTeX</math>
-    h = re.sub(r"<math>(.*?)</math>", lambda m: f"${unescape(m.group(1)).strip()}$", h, flags=re.S)
+    h = re.sub(
+        r"<math>(.*?)</math>",
+        lambda m: f"${unescape(m.group(1)).strip()}$",
+        h,
+        flags=re.S,
+    )
     # tables: rows/cells -> markdown-ish pipes
     h = re.sub(r"</tr>", "\n", h, flags=re.I)
     h = re.sub(r"</t[dh]>", " | ", h, flags=re.I)
@@ -107,9 +119,12 @@ def tree_to_pages(root: dict) -> list[str]:
 
 def run_marker(pdf_path: str, out_dir: str, stem: str) -> str:
     cmd = [
-        MARKER_BIN, pdf_path,
-        "--output_dir", out_dir,
-        "--output_format", "json",
+        MARKER_BIN,
+        pdf_path,
+        "--output_dir",
+        out_dir,
+        "--output_format",
+        "json",
         "--force_ocr",
     ]
     if os.environ.get("MARKER_MODE"):
@@ -170,6 +185,7 @@ async def file_parse(files: list[UploadFile] = File(...)):
 # answers with tiny requests whenever the client can get through. Results and
 # state are persisted under JOBS_DIR, so jobs survive a server restart too.
 
+
 def _job_path(job_id: str) -> str:
     return os.path.join(JOBS_DIR, job_id)
 
@@ -196,7 +212,9 @@ def _run_job_worker(job_id: str, pdf_path: str, stem: str) -> None:
             md = run_marker(pdf_path, os.path.join(_job_path(job_id), "out"), stem)
         _write_state(job_id, status="done", md_content=md, finishedAt=time.time())
     except subprocess.TimeoutExpired:
-        _write_state(job_id, status="error", error=f"marker timeout after {OCR_TIMEOUT}s")
+        _write_state(
+            job_id, status="error", error=f"marker timeout after {OCR_TIMEOUT}s"
+        )
     except Exception as e:  # noqa: BLE001
         _write_state(job_id, status="error", error=str(e))
     finally:
@@ -217,7 +235,9 @@ async def create_job(files: list[UploadFile] = File(...)):
     with open(pdf_path, "wb") as fh:
         fh.write(data)
     _write_state(job_id, status="queued", label=name, stem=stem, createdAt=time.time())
-    threading.Thread(target=_run_job_worker, args=(job_id, pdf_path, stem), daemon=True).start()
+    threading.Thread(
+        target=_run_job_worker, args=(job_id, pdf_path, stem), daemon=True
+    ).start()
     return {"job_id": job_id, "status": "queued"}
 
 
@@ -242,4 +262,5 @@ async def get_job(job_id: str):
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host=os.environ.get("OCR_HOST", "127.0.0.1"), port=8002)

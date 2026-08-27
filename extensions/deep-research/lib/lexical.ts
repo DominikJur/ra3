@@ -1,7 +1,9 @@
 // Lexical (keyword) retrieval: real BM25 plus raw-token preservation for exact
 // symbols, DOIs, and chemical names that a naive word tokenizer would destroy.
 const STOP = new Set(
-  "the a an and or of to in on for with is are was were be been being this that these those it its as at by from we you they i he she him her them not but so if then than also can may will would should could about into over under between through during using via".split(" "),
+  'the a an and or of to in on for with is are was were be been being this that these those it its as at by from we you they i he she him her them not but so if then than also can may will would should could about into over under between through during using via'.split(
+    ' ',
+  ),
 );
 
 export function wordTokens(text: string): string[] {
@@ -19,8 +21,12 @@ export function rawTokens(text: string): string[] {
     const t = s.trim().toLowerCase();
     if (t.length >= 2) out.push(t);
   };
-  for (const m of text.matchAll(/\b(?:10\.\d{4,9}\/[^\s,;)\]"']+|arXiv:\d{4}\.\d{4,5}(?:v\d+)?)/gi)) add(m[0]);
-  for (const m of text.matchAll(/\b[a-zA-Z][a-zA-Z0-9_]*(?:[+*/=<>!&|%#@:][a-zA-Z0-9_+*/=<>!&|%#@:.]*)+\b/g)) add(m[0]);
+  for (const m of text.matchAll(/\b(?:10\.\d{4,9}\/[^\s,;)\]"']+|arXiv:\d{4}\.\d{4,5}(?:v\d+)?)/gi))
+    add(m[0]);
+  for (const m of text.matchAll(
+    /\b[a-zA-Z][a-zA-Z0-9_]*(?:[+*/=<>!&|%#@:][a-zA-Z0-9_+*/=<>!&|%#@:.]*)+\b/g,
+  ))
+    add(m[0]);
   for (const m of text.matchAll(/\b(?:[A-Z][a-z]?\d*){2,}\b/g)) add(m[0]);
   for (const m of text.matchAll(/\b[a-zA-Z][a-zA-Z0-9]*[_\^][a-zA-Z0-9]+\b/g)) add(m[0]);
   return out;

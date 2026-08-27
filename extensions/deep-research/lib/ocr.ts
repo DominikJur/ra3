@@ -12,10 +12,14 @@
 //
 // OCR_BASE_URL is optional: unset or unreachable → document_index simply
 // indexes whatever pdfjs extracted (scanned PDFs will be near-empty).
-export interface OcrSection { heading: string; page: number; text: string; }
+export interface OcrSection {
+  heading: string;
+  page: number;
+  text: string;
+}
 
 export function ocrBaseUrl(): string | undefined {
-  const u = (process.env.OCR_BASE_URL ?? "http://localhost:8002").trim().replace(/\/+$/, "");
+  const u = (process.env.OCR_BASE_URL ?? 'http://localhost:8002').trim().replace(/\/+$/, '');
   return u || undefined;
 }
 
@@ -23,9 +27,9 @@ export function ocrBaseUrl(): string | undefined {
 //   "always" (default) — every doc goes through the OCR server (exact math everywhere)
 //   "auto"             — only scanned/image PDFs (pdfjs text density below the threshold)
 //   "off"              — never OCR
-export function ocrMode(): "always" | "auto" | "off" {
-  const m = (process.env.OCR_MODE ?? "always").trim().toLowerCase();
-  return m === "auto" ? "auto" : m === "off" ? "off" : "always";
+export function ocrMode(): 'always' | 'auto' | 'off' {
+  const m = (process.env.OCR_MODE ?? 'always').trim().toLowerCase();
+  return m === 'auto' ? 'auto' : m === 'off' ? 'off' : 'always';
 }
 
 const MIN_CHARS_PER_PAGE = 40;
@@ -75,23 +79,23 @@ export function markdownToSections(md: string): OcrSection[] {
   // No page markers: split on markdown headings (# / ## / ### ...).
   const sections: OcrSection[] = [];
   let cur: { heading: string; lines: string[] } | null = null;
-  for (const line of md.split("\n")) {
+  for (const line of md.split('\n')) {
     const h = line.match(/^(#{1,4})\s+(.*)$/);
     if (h) {
-      if (cur && cur.lines.join("\n").trim()) {
-        sections.push({ heading: cur.heading, page: 1, text: cur.lines.join("\n").trim() });
+      if (cur && cur.lines.join('\n').trim()) {
+        sections.push({ heading: cur.heading, page: 1, text: cur.lines.join('\n').trim() });
       }
-      cur = { heading: h[2].trim() || "(section)", lines: [] };
+      cur = { heading: h[2].trim() || '(section)', lines: [] };
     } else if (cur) {
       cur.lines.push(line);
     } else {
-      cur = { heading: "", lines: [line] };
+      cur = { heading: '', lines: [line] };
     }
   }
-  if (cur && cur.lines.join("\n").trim()) {
-    sections.push({ heading: cur.heading, page: 1, text: cur.lines.join("\n").trim() });
+  if (cur && cur.lines.join('\n').trim()) {
+    sections.push({ heading: cur.heading, page: 1, text: cur.lines.join('\n').trim() });
   }
-  return sections.length ? sections : [{ heading: "", page: 1, text: md }];
+  return sections.length ? sections : [{ heading: '', page: 1, text: md }];
 }
 
 const OCR_JOB_TIMEOUT_MS = 150 * 60 * 1000; // client cap; server OCR_TIMEOUT defaults to 7200s
@@ -113,34 +117,38 @@ export async function ocrPdf(
 ): Promise<{ sections: OcrSection[]; pageCount: number }> {
   const makeFd = () => {
     const fd = new FormData();
-    fd.append("files", new Blob([buf as unknown as BlobPart], { type: "application/pdf" }), "paper.pdf");
+    fd.append(
+      'files',
+      new Blob([buf as unknown as BlobPart], { type: 'application/pdf' }),
+      'paper.pdf',
+    );
     return fd;
   };
 
   // 1) async job: single upload, immediate job_id
   let jobId: string | null = null;
   try {
-    progress?.("Submitting OCR job to server (async; upload once, result when ready)...");
+    progress?.('Submitting OCR job to server (async; upload once, result when ready)...');
     const resp = await fetch(`${baseUrl}/jobs`, {
-      method: "POST",
+      method: 'POST',
       body: makeFd(),
       signal: AbortSignal.timeout(120_000),
     });
     if (resp.ok) {
       const data = await resp.json();
-      jobId = typeof data?.job_id === "string" ? data.job_id : null;
+      jobId = typeof data?.job_id === 'string' ? data.job_id : null;
     }
     // !resp.ok (404/405) → server predates /jobs: fall through to sync path
   } catch {
     // network failure (tunnel down): let the caller (queue) retry — the job
     // was never accepted, nothing is lost
-    throw new Error("OCR job submission failed (server unreachable)");
+    throw new Error('OCR job submission failed (server unreachable)');
   }
 
   if (jobId) {
     // 2) poll with tiny requests; survive long tunnel outages within the deadline
     const deadline = Date.now() + OCR_JOB_TIMEOUT_MS;
-    let lastStatus = "queued";
+    let lastStatus = 'queued';
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, OCR_POLL_MS));
       try {
@@ -148,43 +156,47 @@ export async function ocrPdf(
         if (!r.ok) continue; // transient server hiccup: keep polling
         const st = await r.json();
         lastStatus = st?.status ?? lastStatus;
-        if (lastStatus === "done" && typeof st?.md_content === "string" && st.md_content.trim()) {
-          progress?.("OCR complete (async job)");
+        if (lastStatus === 'done' && typeof st?.md_content === 'string' && st.md_content.trim()) {
+          progress?.('OCR complete (async job)');
           return mdResult(st.md_content);
         }
-        if (lastStatus === "error") {
-          throw new Error(`OCR job failed: ${st?.error ?? "unknown error"}`);
+        if (lastStatus === 'error') {
+          throw new Error(`OCR job failed: ${st?.error ?? 'unknown error'}`);
         }
-        progress?.(`OCR job ${lastStatus} on server (${Math.round((Date.now() - (deadline - OCR_JOB_TIMEOUT_MS)) / 1000)}s elapsed)...`);
+        progress?.(
+          `OCR job ${lastStatus} on server (${Math.round((Date.now() - (deadline - OCR_JOB_TIMEOUT_MS)) / 1000)}s elapsed)...`,
+        );
       } catch (e) {
         if (e instanceof Error && /OCR job failed/.test(e.message)) throw e;
-        progress?.("OCR server unreachable while polling — will retry...");
+        progress?.('OCR server unreachable while polling — will retry...');
       }
     }
-    throw new Error(`OCR job ${jobId} timed out after ${Math.round(OCR_JOB_TIMEOUT_MS / 60000)} min (last status: ${lastStatus})`);
+    throw new Error(
+      `OCR job ${jobId} timed out after ${Math.round(OCR_JOB_TIMEOUT_MS / 60000)} min (last status: ${lastStatus})`,
+    );
   }
 
   // 3) sync fallback (servers without /jobs)
-  progress?.("Submitting to OCR server (sync /file_parse)...");
+  progress?.('Submitting to OCR server (sync /file_parse)...');
   const resp = await fetch(`${baseUrl}/file_parse`, {
-    method: "POST",
+    method: 'POST',
     body: makeFd(),
     signal: AbortSignal.timeout(30 * 60 * 1000),
   });
   if (!resp.ok) {
-    const body = await resp.text().catch(() => "");
+    const body = await resp.text().catch(() => '');
     throw new Error(`OCR request failed: HTTP ${resp.status} ${body.slice(0, 300)}`);
   }
   const data = await resp.json();
   // Results are keyed by upload filename stem (e.g. "paper"), not "paper.pdf".
   let md: unknown;
   const results = data?.results;
-  if (results && typeof results === "object") {
+  if (results && typeof results === 'object') {
     const keys = Object.keys(results);
     if (keys.length) md = results[keys[0]]?.md_content;
   }
-  if (typeof md !== "string" || !md.trim()) {
-    throw new Error("OCR returned no markdown content");
+  if (typeof md !== 'string' || !md.trim()) {
+    throw new Error('OCR returned no markdown content');
   }
   return mdResult(md);
 }
@@ -194,7 +206,7 @@ function sectionsPageGuess(md: string): number {
   let max = 0;
   for (const re of PAGE_MARKERS) {
     for (const m of md.matchAll(re)) {
-      const n = parseInt(m[0].replace(/\D/g, ""), 10);
+      const n = parseInt(m[0].replace(/\D/g, ''), 10);
       if (!Number.isNaN(n) && n > max) max = n;
     }
   }

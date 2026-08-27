@@ -1,13 +1,15 @@
 // Shared helpers for the deep-research extension.
-export const UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36";
-export const S2_API_KEY = process.env.S2_API_KEY ?? "";
-export const UNPAYWALL_EMAIL = process.env.UNPAYWALL_EMAIL ?? "pi-deep-research@users.noreply.github.com";
-export const S2_FIELDS = "title,abstract,year,authors,citationCount,externalIds,openAccessPdf,url,tldr,publicationVenue";
+export const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36';
+export const S2_API_KEY = process.env.S2_API_KEY ?? '';
+export const UNPAYWALL_EMAIL =
+  process.env.UNPAYWALL_EMAIL ?? 'pi-deep-research@users.noreply.github.com';
+export const S2_FIELDS =
+  'title,abstract,year,authors,citationCount,externalIds,openAccessPdf,url,tldr,publicationVenue';
 
 export type Json = any;
 
 export function s2Headers(): Record<string, string> {
-  return S2_API_KEY ? { "x-api-key": S2_API_KEY } : {};
+  return S2_API_KEY ? { 'x-api-key': S2_API_KEY } : {};
 }
 
 export async function fetchJson(
@@ -16,10 +18,14 @@ export async function fetchJson(
   signal?: AbortSignal,
   attempts = 4,
 ): Promise<Json> {
-  let lastErr: unknown = new Error("fetch failed");
+  let lastErr: unknown = new Error('fetch failed');
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
-      const res = await fetch(url, { headers: { "user-agent": UA, ...headers }, signal, redirect: "follow" });
+      const res = await fetch(url, {
+        headers: { 'user-agent': UA, ...headers },
+        signal,
+        redirect: 'follow',
+      });
       if (res.status === 429) {
         await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
         continue;
@@ -28,7 +34,7 @@ export async function fetchJson(
       return await res.json();
     } catch (e) {
       lastErr = e;
-      if ((e as any)?.name === "AbortError") throw e;
+      if ((e as any)?.name === 'AbortError') throw e;
       await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
     }
   }
@@ -36,7 +42,7 @@ export async function fetchJson(
 }
 
 export async function fetchBuffer(url: string, signal?: AbortSignal): Promise<Buffer> {
-  const res = await fetch(url, { headers: { "user-agent": UA }, signal, redirect: "follow" });
+  const res = await fetch(url, { headers: { 'user-agent': UA }, signal, redirect: 'follow' });
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
   const ab = await res.arrayBuffer();
   return Buffer.from(ab);
@@ -75,44 +81,47 @@ export function compactPaper(p: Json): Json {
     arxiv: ext.ArXiv ?? null,
     openAccessPdf: p.openAccessPdf?.url ?? null,
     url: p.url ?? null,
-    abstract: (p.abstract ?? "").slice(0, 2500) || null,
+    abstract: (p.abstract ?? '').slice(0, 2500) || null,
     tldr: p.tldr?.text ?? null,
   };
 }
 
 export function stripXml(s: string): string {
-  return (s || "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&amp;/g, "&")
+  return (s || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
     .replace(/&quot;/g, '"')
     .replace(/&#39;|&apos;/g, "'")
-    .replace(/\s+/g, " ")
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
 export function crossrefPaper(w: Json): Json {
-  const issued = w.issued?.["date-parts"]?.[0];
+  const issued = w.issued?.['date-parts']?.[0];
   return {
     paperId: null,
     title: w.title?.[0] ?? null,
     year: issued?.[0] ?? null,
-    venue: w["container-title"]?.[0] ?? null,
-    authors: (w.author ?? []).map((a: Json) => [a.given, a.family].filter(Boolean).join(" ")),
-    citationCount: w["is-referenced-by-count"] ?? null,
+    venue: w['container-title']?.[0] ?? null,
+    authors: (w.author ?? []).map((a: Json) => [a.given, a.family].filter(Boolean).join(' ')),
+    citationCount: w['is-referenced-by-count'] ?? null,
     doi: w.DOI ?? null,
     arxiv: null,
     openAccessPdf: null,
     url: w.DOI ? `https://doi.org/${w.DOI}` : (w.URL ?? null),
-    abstract: stripXml(w.abstract ?? "").slice(0, 2500) || null,
+    abstract: stripXml(w.abstract ?? '').slice(0, 2500) || null,
     tldr: null,
   };
 }
 
 // Normalize a paper identifier to a bare DOI (or arXiv→DOI mapping) for Crossref lookups.
 export function toDoi(id: string): string | null {
-  let s = (id || "").trim().replace(/^DOI:\s*/i, "").replace(/^https?:\/\/doi\.org\//i, "");
+  let s = (id || '')
+    .trim()
+    .replace(/^DOI:\s*/i, '')
+    .replace(/^https?:\/\/doi\.org\//i, '');
   if (/^10\.\d{4,9}\/\S+$/.test(s)) return s;
   const arx = s.match(/^arXiv:\s*(\d{4}\.\d{4,5}(v\d+)?)$/i);
   if (arx) return `10.48550/arXiv.${arx[1]}`;
@@ -121,14 +130,17 @@ export function toDoi(id: string): string | null {
 
 export function crossrefRefPaper(r: Json): Json {
   const doi = r.DOI ?? null;
-  const authors = typeof r.author === "string"
-    ? [r.author]
-    : (r.author ?? []).map((a: Json) => (typeof a === "string" ? a : a.name ?? a.family ?? ""));
+  const authors =
+    typeof r.author === 'string'
+      ? [r.author]
+      : (r.author ?? []).map((a: Json) => (typeof a === 'string' ? a : (a.name ?? a.family ?? '')));
   return {
     paperId: null,
-    title: r["article-title"] ?? (typeof r.unstructured === "string" ? r.unstructured.slice(0, 200) : null),
+    title:
+      r['article-title'] ??
+      (typeof r.unstructured === 'string' ? r.unstructured.slice(0, 200) : null),
     year: r.year ?? null,
-    venue: r["volume-title"] ?? r["journal-title"] ?? null,
+    venue: r['volume-title'] ?? r['journal-title'] ?? null,
     authors,
     citationCount: null,
     doi,
@@ -142,7 +154,7 @@ export function crossrefRefPaper(r: Json): Json {
 }
 
 export async function resolvePdfUrl(doi: string): Promise<string | null> {
-  const d = doi.trim().replace(/^https?:\/\/doi\.org\//i, "");
+  const d = doi.trim().replace(/^https?:\/\/doi\.org\//i, '');
   if (/^\d{4}\.\d{4,5}(v\d+)?$/i.test(d)) return `https://arxiv.org/pdf/${d}`;
   try {
     const u = await fetchJson(
@@ -168,11 +180,14 @@ export async function resolvePdfUrl(doi: string): Promise<string | null> {
 }
 
 function looksLikePdf(buf: Buffer): boolean {
-  return buf.length >= 1024 && buf.subarray(0, 5).toString("latin1") === "%PDF-";
+  return buf.length >= 1024 && buf.subarray(0, 5).toString('latin1') === '%PDF-';
 }
 
 export async function fetchPdfByDoi(doi: string, signal?: AbortSignal): Promise<Buffer> {
-  const d = doi.trim().replace(/^https?:\/\/doi\.org\//i, "").replace(/^arXiv:/i, "");
+  const d = doi
+    .trim()
+    .replace(/^https?:\/\/doi\.org\//i, '')
+    .replace(/^arXiv:/i, '');
   const candidates: string[] = [];
   if (/^\d{4}\.\d{4,5}(v\d+)?$/i.test(d)) candidates.push(`https://arxiv.org/pdf/${d}`);
 
@@ -222,7 +237,7 @@ export async function fetchPdfByDoi(doi: string, signal?: AbortSignal): Promise<
   }
 
   const seen = new Set<string>();
-  let lastErr = "";
+  let lastErr = '';
   for (const url of candidates) {
     if (!url || seen.has(url)) continue;
     seen.add(url);
@@ -233,11 +248,18 @@ export async function fetchPdfByDoi(doi: string, signal?: AbortSignal): Promise<
       lastErr = (e as Error).message ?? String(e);
     }
   }
-  throw new Error(`Could not fetch a PDF for DOI ${doi} (tried ${seen.size} source(s)); last error: ${lastErr}`);
+  throw new Error(
+    `Could not fetch a PDF for DOI ${doi} (tried ${seen.size} source(s)); last error: ${lastErr}`,
+  );
 }
 
 export function slugify(s: string): string {
-  return (s || "paper").replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "paper";
+  return (
+    (s || 'paper')
+      .replace(/[^a-zA-Z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60) || 'paper'
+  );
 }
 
 export function simpleHash(s: string): string {
