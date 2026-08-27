@@ -228,8 +228,15 @@ corpus vectors). See `scifact_eval/README.md`.
 
 ## Demo
 
-`./fetch-corpus.sh` downloads the CC-BY demo book; `demo/README.md` has a hard finite-difference
-question whose answer lives only in the book; `demo/retrieve.mjs` runs the 3-leg retrieval.
+<video src="docs/demo.mp4" controls width="100%"></video>
+
+*(4× speed; pi on the left in Windows Terminal (Git Bash), VSCodium on the right with the zentui theme.)*
+
+The full loop: index a book, retrieve, answer with page citations. Corpus: *Finite Difference
+Computing with PDEs* (Langtangen & Linge, CC BY 4.0; `./fetch-corpus.sh` downloads it). The question
+and its grounded answer live in `demo/README.md` and `demo/answer.md`.
+
+[Open the video directly](docs/demo.mp4) if the inline player doesn't load.
 
 ## Layout
 
