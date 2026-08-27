@@ -701,7 +701,7 @@ async function copyDocFromDb(
 ): Promise<void> {
   const doc = srcDb
     .prepare(
-      'SELECT slug, source, pages, chunks, hash, model, dim, lang, created_at FROM docs WHERE slug = ?',
+      'SELECT slug, source, pages, chunks, hash, model, dim, lang, created_at, ocr FROM docs WHERE slug = ?',
     )
     .get(slug) as any;
   if (!doc) throw new Error(`snapshot has no doc '${slug}'`);
@@ -725,7 +725,7 @@ async function copyDocFromDb(
 
     dstDb
       .prepare(
-        'INSERT INTO docs (slug, source, pages, chunks, hash, model, dim, lang, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
+        'INSERT INTO docs (slug, source, pages, chunks, hash, model, dim, lang, created_at, ocr) VALUES (?,?,?,?,?,?,?,?,?,?)',
       )
       .run(
         slug,
@@ -737,6 +737,7 @@ async function copyDocFromDb(
         Number(doc.dim ?? DIM),
         doc.lang ?? null,
         doc.created_at ? String(doc.created_at) : new Date().toISOString(),
+        String(doc.ocr ?? 'unknown'),
       );
 
     // chunks → fresh live ids

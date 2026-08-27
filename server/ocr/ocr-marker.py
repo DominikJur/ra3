@@ -18,14 +18,19 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import urllib.request
 import uuid
+import gzip
+import sqlite3
 from html import unescape
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, Form, UploadFile
+from fastapi.responses import FileResponse
 
 app = FastAPI()
 
@@ -37,6 +42,174 @@ MARKER_BIN = os.environ.get("MARKER_BIN") or os.path.join(
 JOBS_DIR = os.environ.get("OCR_JOBS_DIR", os.path.expanduser("~/.ocr-jobs"))
 os.makedirs(JOBS_DIR, exist_ok=True)
 JOB_LOCK = threading.Lock()  # serialize marker runs: one GPU job at a time
+EMBED_URL = os.environ.get("EMBED_BASE_URL", "http://127.0.0.1:8001")
+DIM = 1024
+
+# ---- local pipeline: chunk + embed + per-doc KB bundle ----------------------
+# The KB bundle is a small SQLite file with the SAME schema as the client's
+# kb.sqlite (docs/chunks/vec_chunks vec0/sparse_terms), gzipped. The client
+# imports it with importKb() — no chunking/embedding needed on the returning
+# machine: "we just get back the KB entries".
+
+def split_sentences(text: str) -> list[str]:
+    out: list[str] = []
+    for para in re.split(r"\n{2,}", text):
+        t = para.strip()
+        if not t:
+            continue
+        parts = re.split(r"(?<=[.!?;:])\s+(?=[A-Z0-9(\"'])", t)
+        for p in parts:
+            s = p.strip()
+            if s:
+                out.append(s)
+    return out
+
+
+def markdown_to_sections(md: str) -> list[dict]:
+    """Split per-page markdown (with <!-- page N --> markers, as this server
+    emits) into sections — mirrors the client's markdownToSections."""
+    sections: list[dict] = []
+    parts = re.split(r"<!--\s*page\s*(\d+)\s*-->", md)
+    for i in range(1, len(parts) - 1, 2):
+        try:
+            page = int(parts[i])
+        except ValueError:
+            page = 1
+        text = (parts[i + 1] or "").strip()
+        if text:
+            sections.append({"heading": "", "page": page, "text": text})
+    if not sections:
+        sections.append({"heading": "", "page": 1, "text": md.strip()})
+    return sections
+
+
+def sections_page_guess(md: str) -> int:
+    return max((s["page"] for s in markdown_to_sections(md)), default=1)
+
+
+def chunk_sections(sections: list[dict], max_len: int = 2000) -> list[dict]:
+    """Faithful port of lib/chunk.ts chunkSections (sentence-aware, heading-prefixed)."""
+    chunks: list[dict] = []
+    for sec in sections:
+        heading = sec.get("heading") or "(preamble)"
+        sentences = split_sentences(sec.get("text") or "")
+        if not sentences:
+            continue
+        cur: list[str] = []
+        cur_len = 0
+
+        def flush() -> None:
+            nonlocal cur, cur_len
+            if not cur:
+                return
+            prefix = (sec.get("heading") + "\n\n") if sec.get("heading") else ""
+            chunks.append(
+                {"page": sec.get("page", 1), "section": heading, "text": prefix + " ".join(cur)}
+            )
+            cur, cur_len = [], 0
+
+        for s in sentences:
+            if cur_len + len(s) > max_len and cur:
+                flush()
+            cur.append(s)
+            cur_len += len(s)
+        flush()
+    return chunks
+
+
+def embed_texts(texts: list[str]) -> tuple[list[list[float]], list[dict]]:
+    """Embed via the local BGE-M3 server (same manifold as the client's KB).
+    Returns (dense 1024-d lists, sparse {term: weight} dicts)."""
+    dense: list[list[float]] = []
+    sparse: list[dict] = []
+    B = 32
+    for i in range(0, len(texts), B):
+        batch = texts[i : i + B]
+        payload = json.dumps({"texts": batch, "return_sparse": True}).encode()
+        last_err: Exception | None = None
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(
+                    f"{EMBED_URL}/embed", data=payload, headers={"content-type": "application/json"}
+                )
+                with urllib.request.urlopen(req, timeout=180) as resp:
+                    j = json.loads(resp.read())
+                dense.extend(j["dense"])
+                sparse.extend(j.get("sparse") or [{}] * len(batch))
+                break
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                if attempt == 2:
+                    raise RuntimeError(f"embed failed: {last_err}") from last_err
+                time.sleep(2 * (attempt + 1))
+    return dense, sparse
+
+
+def build_kb_bundle(job_id: str, stem: str, slug: str, source_name: str, sections: list[dict], page_count: int) -> str:
+    """Chunk + embed + write gz-zipped per-doc KB sqlite; returns the bundle path."""
+    try:
+        import sqlite_vec  # noqa: PLC0415  (installed in the marker venv)
+    except ImportError as e:
+        raise RuntimeError("sqlite-vec python package missing (uv pip install sqlite-vec)") from e
+
+    chunks = chunk_sections(sections)
+    if not chunks:
+        raise RuntimeError("no chunks produced")
+    dense, sparse = embed_texts([c["text"] for c in chunks])
+
+    bundle_dir = os.path.join(_job_path(job_id), "kb")
+    os.makedirs(bundle_dir, exist_ok=True)
+    raw = os.path.join(bundle_dir, f"{slug}.sqlite")
+    gz = raw + ".gz"
+    if os.path.exists(raw):
+        os.remove(raw)
+    if os.path.exists(gz):
+        os.remove(gz)
+
+    conn = sqlite3.connect(raw)
+    try:
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.executescript(
+            """
+            CREATE TABLE docs (slug TEXT PRIMARY KEY, source TEXT NOT NULL, pages INTEGER NOT NULL DEFAULT 0,
+              chunks INTEGER NOT NULL DEFAULT 0, hash TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT 'bge-m3',
+              dim INTEGER NOT NULL DEFAULT 1024, ocr TEXT NOT NULL DEFAULT 'unknown', lang TEXT,
+              created_at TEXT NOT NULL DEFAULT (datetime('now')));
+            CREATE TABLE chunks (chunk_id INTEGER PRIMARY KEY AUTOINCREMENT, doc TEXT NOT NULL REFERENCES docs(slug) ON DELETE CASCADE,
+              page INTEGER NOT NULL, section TEXT NOT NULL DEFAULT '', text TEXT NOT NULL);
+            CREATE INDEX idx_chunks_doc ON chunks(doc);
+            CREATE VIRTUAL TABLE vec_chunks USING vec0(chunk_id INTEGER PRIMARY KEY, embedding float[1024] distance_metric=cosine);
+            CREATE TABLE sparse_terms (chunk_id INTEGER NOT NULL, term TEXT NOT NULL, weight REAL NOT NULL);
+            CREATE INDEX idx_sparse_term ON sparse_terms(term);
+            """
+        )
+        import hashlib
+
+        conn.execute(
+            "INSERT INTO docs (slug, source, pages, chunks, hash, model, dim, ocr, lang) VALUES (?,?,?,?,?,?,?,?,?)",
+            (slug, source_name, page_count, len(chunks), hashlib.md5(source_name.encode()).hexdigest()[:10], "bge-m3", DIM, "marker", None),
+        )
+        for i, c in enumerate(chunks):
+            cur = conn.execute(
+                "INSERT INTO chunks (doc, page, section, text) VALUES (?,?,?,?)",
+                (slug, c["page"], c["section"], c["text"]),
+            )
+            cid = cur.lastrowid
+            blob = struct.pack(f"<{DIM}f", *dense[i])
+            conn.execute("INSERT INTO vec_chunks (chunk_id, embedding) VALUES (?,?)", (cid, blob))
+            for term, w in (sparse[i] or {}).items():
+                conn.execute(
+                    "INSERT INTO sparse_terms (chunk_id, term, weight) VALUES (?,?,?)", (cid, term, float(w))
+                )
+        conn.commit()
+    finally:
+        conn.close()
+
+    with open(raw, "rb") as fh_in, gzip.open(gz, "wb", compresslevel=6) as fh_out:
+        shutil.copyfileobj(fh_in, fh_out)
+    os.remove(raw)
+    return gz
 
 OCR_TIMEOUT = int(os.environ.get("OCR_TIMEOUT", "7200"))  # seconds per file
 
@@ -218,12 +391,15 @@ def _load_state(job_id: str) -> dict:
 
 def _run_job_worker(job_id: str) -> None:
     """Process every file of a (possibly multi-file) job serially; results are
-    stored per stem: state.json -> {results: {<stem>: {md_content}}}. Idempotent
-    w.r.t. the saved input files, so a restart can re-run an incomplete job."""
+    stored per stem: state.json -> {results: {<stem>: {md_content, kb_bundle?}}}.
+    When the job was submitted with kb=1, each file is also chunked + embedded
+    and shipped as a per-doc KB sqlite bundle (kb_bundle = relative path)."""
     try:
         _write_state(job_id, status="processing", startedAt=time.time())
         st = _load_state(job_id)
         files = st.get("files") or []
+        want_kb = bool(st.get("kb"))
+        slugs = st.get("slugs") or {}
         results = {}
         for i, fi in enumerate(files):
             stem = fi.get("stem") or "doc"
@@ -239,7 +415,18 @@ def _run_job_worker(job_id: str) -> None:
                     md = run_marker(
                         pdf_path, os.path.join(_job_path(job_id), "out"), stem
                     )
-                results[stem] = {"md_content": md}
+                entry: dict = {"md_content": md}
+                if want_kb:
+                    try:
+                        sections = markdown_to_sections(md)
+                        slug = slugs.get(stem) or stem
+                        bundle = build_kb_bundle(
+                            job_id, stem, slug, fi.get("name", stem), sections, sections_page_guess(md)
+                        )
+                        entry["kb_bundle"] = os.path.relpath(bundle, _job_path(job_id)).replace("\\", "/")
+                    except Exception as e:  # noqa: BLE001
+                        entry["kb_error"] = str(e)
+                results[stem] = entry
             except subprocess.TimeoutExpired:
                 results[stem] = {
                     "md_content": f"<!-- marker timeout after {OCR_TIMEOUT}s -->"
@@ -283,9 +470,15 @@ _resume_incomplete_jobs()
 
 
 @app.post("/jobs")
-async def create_job(files: list[UploadFile] = File(...)):
+async def create_job(
+    files: list[UploadFile] = File(...),
+    kb: str = Form("0"),
+    slugs: str = Form(""),
+):
     """Multi-file async job: returns {job_id} immediately; files are OCR'd
-    serially in the background (results keyed by filename stem)."""
+    serially in the background (results keyed by filename stem). With kb=1,
+    each file is additionally chunked + embedded and shipped as a per-doc KB
+    sqlite bundle; slugs (JSON {stem: slug}) sets the KB slug per file."""
     job_id = uuid.uuid4().hex[:12]
     d = _job_path(job_id)
     os.makedirs(os.path.join(d, "input"), exist_ok=True)
@@ -298,11 +491,22 @@ async def create_job(files: list[UploadFile] = File(...)):
         with open(os.path.join(d, "input", f"{safe}.pdf"), "wb") as fh:
             fh.write(data)
         file_list.append({"stem": safe, "name": name})
+    slug_map: dict = {}
+    try:
+        slug_map = json.loads(slugs) if slugs else {}
+    except Exception:
+        slug_map = {}
     _write_state(
-        job_id, status="queued", files=file_list, results={}, createdAt=time.time()
+        job_id,
+        status="queued",
+        files=file_list,
+        results={},
+        kb=1 if kb in ("1", "true", "yes") else 0,
+        slugs=slug_map,
+        createdAt=time.time(),
     )
     threading.Thread(target=_run_job_worker, args=(job_id,), daemon=True).start()
-    return {"job_id": job_id, "status": "queued", "files": len(file_list)}
+    return {"job_id": job_id, "status": "queued", "files": len(file_list), "kb": bool(slug_map or kb in ("1", "true", "yes"))}
 
 
 @app.get("/jobs")
@@ -358,11 +562,22 @@ async def get_job(job_id: str):
         "files": st.get("files"),
         "results": results if st.get("status") == "done" else None,
         "md_content": md_content,
+        "kb": st.get("kb"),
         "progress": st.get("progress"),
         "error": st.get("error"),
         "createdAt": st.get("createdAt"),
         "finishedAt": st.get("finishedAt"),
     }
+
+
+@app.get("/jobs/{job_id}/kb/{slug}")
+async def get_kb_bundle(job_id: str, slug: str):
+    """Download a finished per-doc KB bundle (gzipped sqlite)."""
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", slug)
+    path = os.path.join(_job_path(job_id), "kb", f"{safe}.sqlite.gz")
+    if not os.path.isfile(path) or not re.fullmatch(r"[0-9a-f]{12}", job_id):
+        return {"status": "not_found", "error": f"no KB bundle for {slug}"}
+    return FileResponse(path, media_type="application/gzip", filename=f"{safe}.sqlite.gz")
 
 
 if __name__ == "__main__":
