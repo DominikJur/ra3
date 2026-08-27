@@ -310,83 +310,98 @@ async function pumpQueue(): Promise<void> {
   pumping = true;
   try {
     for (;;) {
-      // crashed-session lease expiry: requeue jobs whose heartbeat went stale
-      requeueStaleJobs();
-      if (!hasDueJobs()) {
-        refreshQueueUi();
-        await sleep(5_000);
-        continue;
-      }
-
-      // Health gate BEFORE claiming: never run a job while the servers are
-      // unreachable — the job stays queued and runs when the storm clears.
-      const up = await serversUp();
-      if (!up.embed || !up.ocr) {
-        refreshQueueUi();
-        await sleep(20_000);
-        continue;
-      }
-
-      // Transactional claim: exactly one session wins, even with several pi
-      // processes pumping concurrently.
-      const job = claimNextJob();
-      if (!job) {
-        await sleep(5_000);
-        continue;
-      }
-      refreshQueueUi();
-
-      const heartbeatTimer = setInterval(() => {
-        try {
-          heartbeatJob(job.id);
-        } catch {
-          /* ignore */
-        }
-      }, 10_000);
       try {
-        const result = await indexDoc(
-          { source: job.source, name: job.name, reindex: job.reindex },
-          (msg) => {
-            updateJob(job.id, { progress: msg });
-            refreshQueueUi();
-          },
-        );
-        updateJob(job.id, {
-          status: 'done',
-          chunks: result.chunks,
-          progress: `indexed ${result.chunks} chunks`,
-        });
-        notify(`${job.label}: indexed ${result.chunks} chunks: searchable now`, 'info');
+        await pumpOnce();
       } catch (e) {
-        const msg = (e as Error).message;
-        if (isRetryableError(msg) && job.attempts < MAX_ATTEMPTS) {
-          // Server died mid-job (tunnel drop): back off and retry, don't fail.
-          // The OCR checkpoint (docs/<slug>/ocr-sections.json) makes the retry
-          // resume after OCR instead of re-running it.
-          const attempts = job.attempts + 1;
-          updateJob(job.id, {
-            status: 'queued',
-            attempts,
-            nextAttemptAt: Date.now() + backoffMs(attempts),
-            progress: `server dropped mid-job (${msg}) — retrying in ${Math.round(backoffMs(attempts) / 1000)}s (attempt ${attempts})`,
-            error: msg,
-          });
-          notify(
-            `${job.label}: server unreachable mid-job (${msg}) — will retry automatically`,
-            'warning',
-          );
-        } else {
-          updateJob(job.id, { status: 'error', error: msg, progress: 'failed' });
-          notify(`${job.label}: indexing failed: ${msg}`, 'error');
+        // never let a transient queue/DB/network error kill the pump silently:
+        // log it, wait, keep going
+        try {
+          notify(`ra3 queue pump hiccup (will retry): ${(e as Error).message}`, 'warning');
+        } catch {
+          /* no-op */
         }
-      } finally {
-        clearInterval(heartbeatTimer);
+        await sleep(10_000);
       }
-      refreshQueueUi();
     }
   } finally {
     pumping = false;
   }
+}
+
+async function pumpOnce(): Promise<void> {
+  // crashed-session lease expiry: requeue jobs whose heartbeat went stale
+  requeueStaleJobs();
+  if (!hasDueJobs()) {
+    refreshQueueUi();
+    await sleep(5_000);
+    return;
+  }
+
+  // Health gate BEFORE claiming: never run a job while the servers are
+  // unreachable — the job stays queued and runs when the storm clears.
+  const up = await serversUp();
+  if (!up.embed || !up.ocr) {
+    refreshQueueUi();
+    await sleep(20_000);
+    return;
+  }
+
+  // Transactional claim: exactly one session wins, even with several pi
+  // processes pumping concurrently.
+  const job = claimNextJob();
+  if (!job) {
+    await sleep(5_000);
+    return;
+  }
+  refreshQueueUi();
+
+  const heartbeatTimer = setInterval(() => {
+    try {
+      heartbeatJob(job.id);
+    } catch {
+      /* ignore */
+    }
+  }, 10_000);
+  try {
+    const result = await indexDoc(
+      { source: job.source, name: job.name, reindex: job.reindex },
+      (msg) => {
+        updateJob(job.id, { progress: msg });
+        refreshQueueUi();
+      },
+    );
+    updateJob(job.id, {
+      status: 'done',
+      chunks: result.chunks,
+      progress: `indexed ${result.chunks} chunks`,
+    });
+    notify(`${job.label}: indexed ${result.chunks} chunks: searchable now`, 'info');
+  } catch (e) {
+    const msg = (e as Error).message;
+    if (isRetryableError(msg) && job.attempts < MAX_ATTEMPTS) {
+      // Server died mid-job (tunnel drop): back off and retry, don't fail.
+      // The OCR checkpoint (docs/<slug>/ocr-sections.json) makes the retry
+      // resume after OCR instead of re-running it.
+      const attempts = job.attempts + 1;
+      updateJob(job.id, {
+        status: 'queued',
+        attempts,
+        nextAttemptAt: Date.now() + backoffMs(attempts),
+        progress: `server dropped mid-job (${msg}) — retrying in ${Math.round(backoffMs(attempts) / 1000)}s (attempt ${attempts})`,
+        error: msg,
+      });
+      notify(
+        `${job.label}: server unreachable mid-job (${msg}) — will retry automatically`,
+        'warning',
+      );
+    } else {
+      updateJob(job.id, { status: 'error', error: msg, progress: 'failed' });
+      notify(`${job.label}: indexing failed: ${msg}`, 'error');
+    }
+  } finally {
+    clearInterval(heartbeatTimer);
+  }
+  refreshQueueUi();
 }
 
 function enqueueIndexJob(params: any): QueueJob {
@@ -407,27 +422,41 @@ function enqueueIndexJob(params: any): QueueJob {
 
 export default function (pi: ExtensionAPI) {
   pi.on('session_start', async (_event, ctx) => {
-    sessionCtx = ctx; // stash for background-job notifications + progress UI
-    initQueue();
-    if (hasDueJobs()) void pumpQueue();
+    try {
+      sessionCtx = ctx; // stash for background-job notifications + progress UI
+      initQueue();
+      if (hasDueJobs()) void pumpQueue();
+    } catch (e) {
+      // never let a startup error surface as a bare warning: log + keep the session usable
+      try {
+        notify(`ra3 queue init failed: ${(e as Error).message}`, 'warning');
+      } catch {
+        /* no-op */
+      }
+    }
   });
 
   // Re-frame pi's default "expert coding assistant" identity: RA³ is an academic research
   // assistant, not a software-engineering tool.
   pi.on('before_agent_start', async (event, _ctx) => {
-    const role =
-      'You are RA³, an academic research assistant operating inside pi, a coding agent harness. ' +
-      'You help researchers search, read, cite, and synthesize scholarly books and papers. ' +
-      'Ground every answer in retrieved sources, cited by page. You write code only as a means to that end.';
-    // Idempotent: never re-frame a prompt we already framed (this hook can fire again).
-    if (event.systemPrompt.includes('You are RA³')) return {};
-    // pi's stock role line may reword across pi upgrades; match a forgiving pattern and
-    // fall back to prepending so the re-frame always applies.
-    const m = event.systemPrompt.match(/^You are an? (?:expert )?(?:coding )?assistant[^\n]*/i);
-    const sys = m
-      ? event.systemPrompt.replace(m[0], role)
-      : `${role}\n\n${event.systemPrompt}`;
-    return { systemPrompt: sys };
+    try {
+      const role =
+        'You are RA³, an academic research assistant operating inside pi, a coding agent harness. ' +
+        'You help researchers search, read, cite, and synthesize scholarly books and papers. ' +
+        'Ground every answer in retrieved sources, cited by page. You write code only as a means to that end.';
+      // Idempotent: never re-frame a prompt we already framed (this hook can fire again).
+      if (event.systemPrompt.includes('You are RA³')) return { systemPrompt: event.systemPrompt };
+      // pi's stock role line may reword across pi upgrades; match a forgiving pattern and
+      // fall back to prepending so the re-frame always applies.
+      const m = event.systemPrompt.match(/^You are an? (?:expert )?(?:coding )?assistant[^\n]*/i);
+      const sys = m
+        ? event.systemPrompt.replace(m[0], role)
+        : `${role}\n\n${event.systemPrompt}`;
+      return { systemPrompt: sys };
+    } catch {
+      // worst case: leave pi's prompt untouched — never throw from a hook
+      return { systemPrompt: event.systemPrompt };
+    }
   });
 
   pi.registerTool({

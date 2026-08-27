@@ -8,6 +8,7 @@
 // session (at-least-once delivery; the OCR checkpoint + reindex-replace make a
 // rare double-run harmless).
 import { DatabaseSync } from 'node:sqlite';
+import { existsSync, readFileSync, renameSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -198,10 +199,9 @@ export function listRecentJobs(n = 20): QueueJob[] {
 // out of the way so the old file can never be re-read.
 export function migrateLegacyQueueFile(): void {
   const legacy = path.join(os.homedir(), '.pi', 'agent', 'ra3-queue.json');
-  const { existsSync, renameSync } = require('node:fs') as typeof import('node:fs');
   if (!existsSync(legacy)) return;
   try {
-    const jobs = JSON.parse(require('node:fs').readFileSync(legacy, 'utf8')) as any[];
+    const jobs = JSON.parse(readFileSync(legacy, 'utf8')) as any[];
     if (!Array.isArray(jobs)) return;
     const RETRY_RE =
       /fetch failed|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE|AbortError|timed out|timeout|unreachable|Could not fetch|HTTP 5\d\d|OCR request failed|embed HTTP|no markdown content/i;

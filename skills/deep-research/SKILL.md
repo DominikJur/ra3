@@ -16,6 +16,8 @@ Run a literature-backed research pipeline end-to-end; write the final report to 
   citation count, DOI/arXiv id, open-access link.
 - **Queue key papers immediately** with `document_index({ source: "<doi-or-url>" })`: async, so
   queue as you find them, never batch at the end. Re-submitting re-indexes (wasteful for books).
+  The queue is shared + exactly-once across pi sessions: any session can queue, jobs run once
+  (never re-queue because another session "owns" it — there is no owner).
 - Note non-paper leads (repos, datasets, code, tools) with URLs: for *Promising leads*.
 
 ## 3. Expand
@@ -44,7 +46,10 @@ Real LaTeX in the Markdown (must render on GitHub/VS Code):
 - `academic_citations(paperId, direction="citations"|"references", limit?)`
 - `unpaywall_resolver(doi)` → `{ is_oa, pdf, ... }`
 - `pdf_extract(url?|doi?, mode="text"|"render", pages?, dpi?)`
-- `document_index(source, name?, reindex?)` → queue for background indexing
+- `document_index(source, name?, reindex?)` → queue for background indexing (async, exactly-once)
+- `document_submit(sources[], name?)` → upload N PDFs to server as ONE fire-and-forget job (OCR +
+  chunk + embed all server-side; close the PC, pull later)
+- `document_pull(replace?)` → download finished server jobs and merge them into the KB
 - `document_search(query, k?, docs?, keyword?)` → top-k chunks (keyword=false = dense-only)
 - `document_page(doc, page)` → full text of one page (for exact equations/derivations)
 - `document_status()` → indexed docs + queue
