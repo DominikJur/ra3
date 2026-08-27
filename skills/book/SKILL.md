@@ -31,3 +31,12 @@ description: Local knowledge base over indexed books and papers. Index PDFs and 
   by exactly one session (a heartbeat lease requeues work from crashed sessions).
 - **Page numbers are PDF page numbers.** KB pages = the PDF's pages (OCR keeps them via
   per-page markers). Exception: `langtangen-fdm` — book page = PDF page − 24.
+
+## Fire-and-forget batch indexing (close the PC)
+- **`document_submit({ sources: [paths...] })`** uploads several PDFs to server as ONE async OCR
+  job and returns immediately — server keeps OCRing in the background even with this PC off
+  (results persist on the server). Each file becomes a KB doc (slug = filename stem).
+- **`document_pull({ replace? })`** (or `node server-jobs.mjs pull`) fetches finished jobs and
+  ingests them (chunk → embed → KB). Idempotent: run it whenever you're back; jobs still
+  running are reported as waiting. `document_status` shows pending remote jobs.
+- CLI equivalent: `node server-jobs.mjs <submit|status|pull>`.

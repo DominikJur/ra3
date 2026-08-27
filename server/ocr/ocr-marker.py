@@ -205,40 +205,135 @@ def _write_state(job_id: str, **fields) -> None:
         pass
 
 
-def _run_job_worker(job_id: str, pdf_path: str, stem: str) -> None:
+def _load_state(job_id: str) -> dict:
+    p = os.path.join(_job_path(job_id), "state.json")
+    if os.path.exists(p):
+        try:
+            with open(p, encoding="utf-8") as fh:
+                return json.load(fh)
+        except Exception:
+            pass
+    return {}
+
+
+def _run_job_worker(job_id: str) -> None:
+    """Process every file of a (possibly multi-file) job serially; results are
+    stored per stem: state.json -> {results: {<stem>: {md_content}}}. Idempotent
+    w.r.t. the saved input files, so a restart can re-run an incomplete job."""
     try:
         _write_state(job_id, status="processing", startedAt=time.time())
-        with JOB_LOCK:
-            md = run_marker(pdf_path, os.path.join(_job_path(job_id), "out"), stem)
-        _write_state(job_id, status="done", md_content=md, finishedAt=time.time())
-    except subprocess.TimeoutExpired:
+        st = _load_state(job_id)
+        files = st.get("files") or []
+        results = {}
+        for i, fi in enumerate(files):
+            stem = fi.get("stem") or "doc"
+            pdf_path = os.path.join(_job_path(job_id), "input", f"{stem}.pdf")
+            if not os.path.exists(pdf_path):
+                results[stem] = {"md_content": f"<!-- input missing for {stem} -->"}
+                continue
+            _write_state(
+                job_id, progress=f"file {i + 1}/{len(files)}: {fi.get('name', stem)}"
+            )
+            try:
+                with JOB_LOCK:
+                    md = run_marker(
+                        pdf_path, os.path.join(_job_path(job_id), "out"), stem
+                    )
+                results[stem] = {"md_content": md}
+            except subprocess.TimeoutExpired:
+                results[stem] = {
+                    "md_content": f"<!-- marker timeout after {OCR_TIMEOUT}s -->"
+                }
+            except Exception as e:  # noqa: BLE001
+                results[stem] = {"md_content": f"<!-- marker failed: {e} -->"}
+            _write_state(
+                job_id, results=results, progress=f"file {i + 1}/{len(files)} done"
+            )
         _write_state(
-            job_id, status="error", error=f"marker timeout after {OCR_TIMEOUT}s"
+            job_id,
+            status="done",
+            results=results,
+            progress=f"{len(files)} file(s)",
+            finishedAt=time.time(),
         )
     except Exception as e:  # noqa: BLE001
         _write_state(job_id, status="error", error=str(e))
     finally:
-        # keep input.pdf for debugging; drop the marker output tree
         shutil.rmtree(os.path.join(_job_path(job_id), "out"), ignore_errors=True)
+
+
+# After a server restart, re-run jobs that were queued/processing (their input
+# PDFs are persisted; marker is idempotent, so an already-OCR'd file is simply
+# re-OCR'd).
+def _resume_incomplete_jobs() -> None:
+    try:
+        for job_id in os.listdir(JOBS_DIR):
+            if not re.fullmatch(r"[0-9a-f]{12}", job_id):
+                continue
+            st = _load_state(job_id)
+            if st.get("status") in ("queued", "processing"):
+                threading.Thread(
+                    target=_run_job_worker, args=(job_id,), daemon=True
+                ).start()
+    except Exception:
+        pass
+
+
+_resume_incomplete_jobs()
 
 
 @app.post("/jobs")
 async def create_job(files: list[UploadFile] = File(...)):
+    """Multi-file async job: returns {job_id} immediately; files are OCR'd
+    serially in the background (results keyed by filename stem)."""
     job_id = uuid.uuid4().hex[:12]
     d = _job_path(job_id)
-    os.makedirs(d, exist_ok=True)
-    f = files[0]
-    data = await f.read()
-    name = f.filename or "doc.pdf"
-    stem = name.rsplit(".", 1)[0] if "." in name else name
-    pdf_path = os.path.join(d, "input.pdf")
-    with open(pdf_path, "wb") as fh:
-        fh.write(data)
-    _write_state(job_id, status="queued", label=name, stem=stem, createdAt=time.time())
-    threading.Thread(
-        target=_run_job_worker, args=(job_id, pdf_path, stem), daemon=True
-    ).start()
-    return {"job_id": job_id, "status": "queued"}
+    os.makedirs(os.path.join(d, "input"), exist_ok=True)
+    file_list: list[dict] = []
+    for f in files:
+        data = await f.read()
+        name = f.filename or "doc.pdf"
+        stem = name.rsplit(".", 1)[0] if "." in name else name
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", stem) or "doc"
+        with open(os.path.join(d, "input", f"{safe}.pdf"), "wb") as fh:
+            fh.write(data)
+        file_list.append({"stem": safe, "name": name})
+    _write_state(
+        job_id, status="queued", files=file_list, results={}, createdAt=time.time()
+    )
+    threading.Thread(target=_run_job_worker, args=(job_id,), daemon=True).start()
+    return {"job_id": job_id, "status": "queued", "files": len(file_list)}
+
+
+@app.get("/jobs")
+async def list_jobs(status: str | None = None):
+    """List persisted jobs (optionally filtered by status) — used by the client
+    to discover finished work after the submitting machine was offline."""
+    jobs: list[dict] = []
+    try:
+        for job_id in os.listdir(JOBS_DIR):
+            if not re.fullmatch(r"[0-9a-f]{12}", job_id):
+                continue
+            st = _load_state(job_id)
+            if not st:
+                continue
+            if status and st.get("status") != status:
+                continue
+            jobs.append(
+                {
+                    "job_id": job_id,
+                    "status": st.get("status"),
+                    "files": st.get("files", []),
+                    "progress": st.get("progress"),
+                    "error": st.get("error"),
+                    "createdAt": st.get("createdAt"),
+                    "finishedAt": st.get("finishedAt"),
+                }
+            )
+    except Exception:
+        pass
+    jobs.sort(key=lambda j: j.get("createdAt") or 0)
+    return {"jobs": jobs}
 
 
 @app.get("/jobs/{job_id}")
@@ -248,12 +343,22 @@ async def get_job(job_id: str):
         return {"status": "not_found"}
     with open(os.path.join(d, "state.json"), encoding="utf-8") as fh:
         st = json.load(fh)
-    # keep the response small: md_content only when done
+    # keep the response small: md_content only when done; for single-file jobs
+    # also keep the legacy top-level md_content so old clients keep working
+    md_content = None
+    results = st.get("results") or {}
+    if st.get("status") == "done":
+        keys = list(results.keys())
+        if keys:
+            md_content = results[keys[0]].get("md_content")
     return {
         "job_id": job_id,
         "status": st.get("status"),
         "label": st.get("label"),
-        "md_content": st.get("md_content"),
+        "files": st.get("files"),
+        "results": results if st.get("status") == "done" else None,
+        "md_content": md_content,
+        "progress": st.get("progress"),
         "error": st.get("error"),
         "createdAt": st.get("createdAt"),
         "finishedAt": st.get("finishedAt"),
