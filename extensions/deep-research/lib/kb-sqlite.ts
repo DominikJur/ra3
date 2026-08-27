@@ -8,8 +8,12 @@
 import { DatabaseSync } from "node:sqlite";
 import * as sqliteVec from "sqlite-vec";
 import { Worker } from "node:worker_threads";
-import { mkdirSync, copyFileSync, statSync, existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
-import { gzipSync, gunzipSync } from "node:zlib";
+import { mkdirSync, existsSync, rmSync } from "node:fs";
+import { promises as fsp } from "node:fs";
+import { gzip as gzipCb, gunzip as gunzipCb } from "node:zlib";
+import { promisify } from "node:util";
+const gzip = promisify(gzipCb);
+const gunzip = promisify(gunzipCb);
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -149,6 +153,10 @@ export function ingestChunks(opts: {
       for (const [term, w] of opts.sparse[i]) insSp.run(Number(cid), term, w);
     }
     d.exec("COMMIT");
+    // Fold the WAL back periodically so kb.sqlite-wal doesn't grow unbounded
+    // (a 300+ MB stale WAL was seen; the search worker's own connection still
+    // works because WAL allows concurrent readers).
+    try { d.exec("PRAGMA wal_checkpoint(TRUNCATE)"); } catch { /* best effort */ }
   } catch (e) {
     d.exec("ROLLBACK");
     throw e;
@@ -521,7 +529,7 @@ export function getPageText(slug: string, page: number): { text: string; chunks:
 // dense (vec_chunks) + learned-sparse (sparse_terms) vectors are copied verbatim, so the
 // snapshot re-imports without re-embedding. Optionally gzip (inferred from a .gz extension
 // or gzip:true).
-export function exportKb(dest: string, opts: { gzip?: boolean } = {}): { dest: string; docs: number; chunks: number; bytes: number } {
+export async function exportKb(dest: string, opts: { gzip?: boolean } = {}): Promise<{ dest: string; docs: number; chunks: number; bytes: number }> {
   const d = getDb();
   // Fold the WAL into the main file so a plain byte-copy is a complete, self-contained snapshot.
   d.exec("PRAGMA wal_checkpoint(FULL);");
@@ -530,15 +538,17 @@ export function exportKb(dest: string, opts: { gzip?: boolean } = {}): { dest: s
   const gz = opts.gzip === true || dest.toLowerCase().endsWith(".gz");
   const out = gz && !dest.toLowerCase().endsWith(".gz") ? `${dest}.gz` : dest;
   if (path.resolve(out) === path.resolve(DB_PATH)) throw new Error("export destination must differ from the live KB file");
-  mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
-  if (gz) writeFileSync(out, gzipSync(readFileSync(DB_PATH)));
-  else copyFileSync(DB_PATH, out);
-  return { dest: out, docs, chunks, bytes: statSync(out).size };
+  await fsp.mkdir(path.dirname(path.resolve(out)), { recursive: true });
+  if (gz) await fsp.writeFile(out, await gzip(await fsp.readFile(DB_PATH)));
+  else await fsp.copyFile(DB_PATH, out);
+  const st = await fsp.stat(out);
+  return { dest: out, docs, chunks, bytes: st.size };
 }
 
 // Copy one doc (chunks + dense + sparse) from a snapshot DB into the live DB, remapping
-// chunk ids so they never collide with the live KB's own ids.
-function copyDocFromDb(srcDb: DatabaseSync, dstDb: DatabaseSync, slug: string): void {
+// chunk ids so they never collide with the live KB's own ids. Async: yields to the event
+// loop between sparse batches so a full-KB import (millions of terms) doesn't freeze pi.
+async function copyDocFromDb(srcDb: DatabaseSync, dstDb: DatabaseSync, slug: string): Promise<void> {
   const doc = srcDb.prepare("SELECT slug, source, pages, chunks, hash, model, dim, lang, created_at FROM docs WHERE slug = ?").get(slug) as any;
   if (!doc) throw new Error(`snapshot has no doc '${slug}'`);
   const srcChunks = srcDb.prepare("SELECT chunk_id, page, section, text FROM chunks WHERE doc = ? ORDER BY chunk_id").all(slug) as any[];
@@ -597,6 +607,7 @@ function copyDocFromDb(srcDb: DatabaseSync, dstDb: DatabaseSync, slug: string): 
         vals.push(nid, String(row.term), Number(row.weight));
       }
       if (phs.length) dstDb.prepare(`INSERT INTO sparse_terms (chunk_id, term, weight) VALUES ${phs.join(",")}`).run(...vals);
+      if ((i / B) % 25 === 0) await new Promise((r) => setImmediate(r));
     }
 
     dstDb.exec("COMMIT");
@@ -608,14 +619,14 @@ function copyDocFromDb(srcDb: DatabaseSync, dstDb: DatabaseSync, slug: string): 
 
 // Import docs from a snapshot produced by exportKb. Vectors are copied verbatim (no
 // re-embedding). Merge by default (existing slugs are skipped); replace:true overwrites them.
-export function importKb(src: string, opts: { replace?: boolean } = {}): { docs: number; chunks: number; skipped: number } {
+export async function importKb(src: string, opts: { replace?: boolean } = {}): Promise<{ docs: number; chunks: number; skipped: number }> {
   if (!existsSync(src)) throw new Error(`import source not found: ${src}`);
   let tmp: string | null = null;
   let srcDb: DatabaseSync | null = null;
   try {
     if (src.toLowerCase().endsWith(".gz")) {
       tmp = `${src}.unpacked.sqlite`;
-      writeFileSync(tmp, gunzipSync(readFileSync(src)));
+      await fsp.writeFile(tmp, await gunzip(await fsp.readFile(src)));
     }
     const srcPath = tmp ?? src;
     if (path.resolve(srcPath) === path.resolve(DB_PATH)) throw new Error("import source must differ from the live KB file");
@@ -647,9 +658,10 @@ export function importKb(src: string, opts: { replace?: boolean } = {}): { docs:
     let chunks = 0;
     try {
       for (const t of todo) {
-        copyDocFromDb(srcDb, d, t.slug);
+        await copyDocFromDb(srcDb, d, t.slug);
         docs++;
         chunks += t.chunks;
+        await new Promise((r) => setImmediate(r));
       }
     } finally {
       d.exec("CREATE INDEX IF NOT EXISTS idx_sparse_term ON sparse_terms(term);");

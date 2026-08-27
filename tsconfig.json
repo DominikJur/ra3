@@ -3,14 +3,23 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ES2023", "DOM"],
-    "types": ["node"],
+    "lib": [
+      "ES2023",
+      "DOM"
+    ],
+    "types": [
+      "node"
+    ],
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "noUnusedLocals": false,
+    "noUnusedLocals": true,
     "verbatimModuleSyntax": false,
-    "allowImportingTsExtensions": true
+    "allowImportingTsExtensions": true,
+    "noUnusedParameters": true,
+    "noUncheckedSideEffectImports": true
   },
-  "include": ["extensions"]
+  "include": [
+    "extensions"
+  ]
 }

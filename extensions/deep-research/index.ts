@@ -7,7 +7,7 @@ import { Text, type Component } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { promises as fs } from "node:fs";
-import { mkdirSync, writeFileSync, renameSync, readFileSync, existsSync } from "node:fs";
+import { openSync, writeSync, closeSync, statSync, rmSync, existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -22,7 +22,6 @@ import {
   toDoi,
   crossrefRefPaper,
   UNPAYWALL_EMAIL,
-  type Json,
 } from "./lib/shared.ts";
 import { extractPdf, renderPages, chunkSections } from "./lib/chunk.ts";
 import { embedTexts, ingestChunks, searchDocuments, listDocuments, exportKb, importKb, docDir, getPageText, EMBED_BASE_URL } from "./lib/kb-sqlite.ts";
@@ -220,29 +219,75 @@ let pumping = false;
 let sessionCtx: any = null; // stashed in session_start / first tool call
 
 // Queue state persists to ~/.pi/agent/ra3-queue.json so a pi restart resumes queued work
-// (an in-memory queue would silently drop books on restart).
+// (an in-memory queue would silently drop books on restart). A lock file makes sure only ONE
+// pi session owns the queue: without it, two sessions both restoring + pumping double-index.
 const queueFile = path.join(os.homedir(), ".pi", "agent", "ra3-queue.json");
+const queueLockFile = path.join(os.homedir(), ".pi", "agent", "ra3-queue.lock");
 let restored = false;
+let queueOwner = false;
 
-function persistQueue(): void {
+// Take the queue lock (exclusive create). Stale locks (dead pid, or older than 10 min) are
+// stolen so a crashed session doesn't block the next one forever.
+function acquireQueueLock(): boolean {
+  const tryLock = (): boolean => {
+    try {
+      const fd = openSync(queueLockFile, "wx");
+      writeSync(fd, JSON.stringify({ pid: process.pid, at: Date.now() }));
+      closeSync(fd);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (tryLock()) return true;
+  try {
+    let pidAlive = false;
+    try {
+      const l = JSON.parse(readFileSync(queueLockFile, "utf8"));
+      if (l?.pid) {
+        process.kill(Number(l.pid), 0);
+        pidAlive = true;
+      }
+    } catch {
+      /* missing/corrupt lock, or dead pid: steal */
+    }
+    const st = statSync(queueLockFile);
+    if (!pidAlive || Date.now() - st.mtimeMs > 10 * 60 * 1000) {
+      rmSync(queueLockFile, { force: true });
+      return tryLock();
+    }
+  } catch {
+    /* raced */
+  }
+  return false;
+}
+
+// Lock lifetime = the session's lifetime: released implicitly when the pid dies
+// (stale-steal in acquireQueueLock) or after 10 min idle.
+
+async function persistQueue(): Promise<void> {
   try {
     const jobs = [...jobsById.values()];
     const active = jobs.filter((j) => j.status === "queued" || j.status === "processing");
     const finished = jobs.filter((j) => j.status === "done" || j.status === "error").slice(-20);
     const toStore = [...active, ...finished];
-    mkdirSync(path.dirname(queueFile), { recursive: true });
+    await fs.mkdir(path.dirname(queueFile), { recursive: true });
     const tmp = `${queueFile}.tmp`;
-    writeFileSync(tmp, JSON.stringify(toStore, null, 2));
-    renameSync(tmp, queueFile);
+    await fs.writeFile(tmp, JSON.stringify(toStore, null, 2));
+    await fs.rename(tmp, queueFile);
   } catch { /* persistence is best-effort; never break indexing */ }
 }
 
-function restoreQueue(): void {
+async function restoreQueue(): Promise<void> {
   if (restored) return;
   restored = true;
+  // Only the session that holds the lock restores/processes the queue. Other sessions
+  // (spawned later, e.g. a second terminal) must not double-index.
+  queueOwner = acquireQueueLock();
+  if (!queueOwner) return;
   try {
     if (!existsSync(queueFile)) return;
-    const jobs = JSON.parse(readFileSync(queueFile, "utf8")) as IndexJob[];
+    const jobs = JSON.parse(await fs.readFile(queueFile, "utf8")) as IndexJob[];
     if (!Array.isArray(jobs)) return;
     for (const j of jobs) {
       if (j.status === "processing") {
@@ -278,7 +323,7 @@ function refreshQueueUi(): void {
       sessionCtx.ui.setStatus?.("ra3-kb", undefined);
       return;
     }
-    const lines = active.slice(0, 6).map((j) => `${j.status === "processing" ? "⏳" : "⏱"} ${j.label}: ${j.progress}`);
+    const lines = active.slice(0, 6).map((j) => `[${j.status === "processing" ? "processing" : "queued"}] ${j.label}: ${j.progress}`);
     if (active.length > 6) lines.push(`… +${active.length - 6} more`);
     sessionCtx.ui.setWidget?.("ra3-kb", lines);
     sessionCtx.ui.setStatus?.("ra3-kb", `indexing ${processing.length} · ${queued.length} queued`);
@@ -314,7 +359,7 @@ async function pumpQueue(): Promise<void> {
       }
 
       job.status = "processing";
-      persistQueue();
+      await persistQueue();
       refreshQueueUi();
       try {
         const result = await indexDoc(
@@ -323,7 +368,7 @@ async function pumpQueue(): Promise<void> {
         );
         job.status = "done";
         job.chunks = result.chunks;
-        persistQueue();
+        await persistQueue();
         notify(`${job.label}: indexed ${result.chunks} chunks: searchable now`, "info");
       } catch (e) {
         const msg = (e as Error).message;
@@ -336,12 +381,12 @@ async function pumpQueue(): Promise<void> {
           job.progress = `server dropped mid-job (${msg}) — retrying in ${Math.round(backoffMs(job.attempts) / 1000)}s (attempt ${job.attempts})`;
           job.nextAttemptAt = Date.now() + backoffMs(job.attempts);
           jobQueue.push(job);
-          persistQueue();
+          await persistQueue();
           notify(`${job.label}: server unreachable mid-job (${msg}) — will retry automatically`, "warning");
         } else {
           job.status = "error";
           job.error = msg;
-          persistQueue();
+          await persistQueue();
           notify(`${job.label}: indexing failed: ${msg}`, "error");
         }
       }
@@ -352,7 +397,8 @@ async function pumpQueue(): Promise<void> {
   }
 }
 
-function enqueueIndexJob(params: any): IndexJob {
+async function enqueueIndexJob(params: any): Promise<IndexJob | null> {
+  if (!queueOwner) return null; // another pi session owns the queue; refuse to double-index
   const src = String(params.source).trim();
   const name = params.name ? String(params.name) : undefined;
   const label = name ?? (src.split(/[\\/]/).pop()?.replace(/\.pdf$/i, "") || src);
@@ -368,7 +414,7 @@ function enqueueIndexJob(params: any): IndexJob {
   };
   jobsById.set(job.id, job);
   jobQueue.push(job);
-  persistQueue();
+  await persistQueue();
   refreshQueueUi();
   void pumpQueue();
   return job;
@@ -377,7 +423,7 @@ function enqueueIndexJob(params: any): IndexJob {
 export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     sessionCtx = ctx; // stash for background-job notifications + progress UI
-    restoreQueue();
+    await restoreQueue();
     if (jobQueue.length) void pumpQueue();
   });
 
@@ -644,7 +690,12 @@ export default function (pi: ExtensionAPI) {
     async execute(_id: string, params: any, _signal?: AbortSignal, _onUpdate?: any, ctx?: any) {
       try {
         if (ctx) sessionCtx = ctx;
-        const job = enqueueIndexJob(params);
+        const job = await enqueueIndexJob(params);
+        if (!job) {
+          return toolError(
+            "document_index: another pi session owns the indexing queue (ra3-queue.lock). Queue jobs from that session, or quit it and retry here.",
+          );
+        }
         const result = {
           status: "queued",
           job_id: job.id,
@@ -775,7 +826,7 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_id: string, params: any) {
       try {
-        const result = exportKb(String(params.dest), { gzip: params.gzip });
+        const result = await exportKb(String(params.dest), { gzip: params.gzip });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
       } catch (e) {
         return toolError(`document_export_kb failed: ${(e as Error).message}`);
@@ -799,7 +850,7 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_id: string, params: any) {
       try {
-        const result = importKb(String(params.source), { replace: params.replace });
+        const result = await importKb(String(params.source), { replace: params.replace });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
       } catch (e) {
         return toolError(`document_import_kb failed: ${(e as Error).message}`);

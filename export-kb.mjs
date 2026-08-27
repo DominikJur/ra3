@@ -14,5 +14,5 @@ if (!dest) {
   console.error("Usage: node export-kb.mjs <dest.sqlite> [--gzip]");
   process.exit(1);
 }
-const res = exportKb(dest, { gzip: args.includes("--gzip") });
+const res = await exportKb(dest, { gzip: args.includes("--gzip") });
 console.log(JSON.stringify(res, null, 2));

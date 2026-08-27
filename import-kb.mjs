@@ -14,5 +14,5 @@ if (!src) {
   console.error("Usage: node import-kb.mjs <src.sqlite[.gz]> [--replace]");
   process.exit(1);
 }
-const res = importKb(src, { replace: args.includes("--replace") });
+const res = await importKb(src, { replace: args.includes("--replace") });
 console.log(JSON.stringify(res, null, 2));
