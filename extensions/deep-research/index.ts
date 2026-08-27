@@ -432,7 +432,7 @@ export default function (pi: ExtensionAPI) {
       "Prefer reading rendered .png pages with the read tool when the model is multimodal, since two-column text extraction order is unreliable.",
     ],
     parameters: Type.Object({
-      url: Type.Optional(Type.String({ description: "Direct PDF URL (https://...pdf). Takes precedence over doi." })),
+      url: Type.Optional(Type.String({ description: "Direct PDF URL (https://...pdf) or a local file path (e.g. C:/.../paper.pdf). Takes precedence over doi." })),
       doi: Type.Optional(Type.String({ description: "DOI or arXiv id; resolved to an open-access PDF automatically." })),
       mode: Type.Optional(Type.String({ description: "'text' (default) or 'render'" })),
       pages: Type.Optional(Type.String({ description: "Pages to render, e.g. '1-5' or '1,3,7'. Default: first 8 pages. Max 30 rendered pages." })),
@@ -449,12 +449,19 @@ export default function (pi: ExtensionAPI) {
           onUpdate?.({ content: [{ type: "text", text: `Resolving DOI ${params.doi}...` }] });
           buf = await fetchPdfByDoi(params.doi, _signal);
         } else if (pdfUrl) {
-          if (!slug) slug = slugify(params.url ?? "paper");
-          onUpdate?.({ content: [{ type: "text", text: `Downloading ${pdfUrl} ...` }] });
-          buf = await fetchBuffer(pdfUrl, _signal);
-          if (buf.length < 1024) throw new Error("Downloaded file is suspiciously small: probably not a PDF.");
+          const isHttp = /^https?:\/\//i.test(pdfUrl);
+          if (isHttp) {
+            slug = slugify(params.url ?? "paper");
+            onUpdate?.({ content: [{ type: "text", text: `Downloading ${pdfUrl} ...` }] });
+            buf = await fetchBuffer(pdfUrl, _signal);
+            if (buf.length < 1024) throw new Error("Downloaded file is suspiciously small: probably not a PDF.");
+          } else {
+            slug = slugify(path.basename(pdfUrl).replace(/\.pdf$/i, "")) || "paper";
+            onUpdate?.({ content: [{ type: "text", text: `Reading local PDF ${pdfUrl} ...` }] });
+            buf = await fs.readFile(path.resolve(pdfUrl));
+          }
         } else {
-          return toolError("pdf_extract: provide a PDF url, or a doi that resolves to an open-access PDF (try unpaywall_resolver first).");
+          return toolError("pdf_extract: provide a PDF url (http or local path), or a doi that resolves to an open-access PDF (try unpaywall_resolver first).");
         }
 
         const dir = path.join(ctx?.cwd ?? process.cwd(), ".deep-research", "papers", slug);
