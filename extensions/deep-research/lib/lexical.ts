@@ -66,6 +66,41 @@ export function buildBM25(chunks: LexicalChunk[], k1 = 1.2, b = 0.75): BM25Index
   return { chunks, postings, docLen, avgLen: totalLen / Math.max(1, chunks.length), k1, b };
 }
 
+// Async variant of buildBM25: identical output, but yields to the event loop every
+// `yieldEvery` chunks. Building the index over a large corpus (tens of thousands of
+// chunks) is otherwise a single synchronous pass that freezes the TUI; the yields keep
+// the terminal responsive while the index is constructed on first use / after ingest.
+export async function buildBM25Async(
+  chunks: LexicalChunk[],
+  k1 = 1.2,
+  b = 0.75,
+  yieldEvery = 400,
+): Promise<BM25Index> {
+  const postings = new Map<string, Array<{ id: number; tf: number }>>();
+  const docLen = new Int32Array(chunks.length);
+  let totalLen = 0;
+  for (let i = 0; i < chunks.length; i++) {
+    const c = chunks[i];
+    const terms = tokenize(c.text);
+    docLen[c.id] = terms.length;
+    totalLen += terms.length;
+    const tf = new Map<string, number>();
+    for (const t of terms) tf.set(t, (tf.get(t) || 0) + 1);
+    for (const [t, n] of tf) {
+      let arr = postings.get(t);
+      if (!arr) {
+        arr = [];
+        postings.set(t, arr);
+      }
+      arr.push({ id: c.id, tf: n });
+    }
+    if ((i + 1) % yieldEvery === 0) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  }
+  return { chunks, postings, docLen, avgLen: totalLen / Math.max(1, chunks.length), k1, b };
+}
+
 export function bm25Search(
   index: BM25Index,
   query: string,

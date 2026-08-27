@@ -11,7 +11,7 @@ import { mkdirSync, copyFileSync, statSync, existsSync, readFileSync, writeFileS
 import { gzipSync, gunzipSync } from "node:zlib";
 import os from "node:os";
 import path from "node:path";
-import { buildBM25, bm25Search, type BM25Index } from "./lexical.ts";
+import { buildBM25Async, bm25Search, type BM25Index } from "./lexical.ts";
 import { simpleHash } from "./shared.ts";
 
 export const KB_ROOT = process.env.KB_ROOT ?? path.join(os.homedir(), "pi_research", "books");
@@ -136,7 +136,7 @@ export function ingestChunks(opts: {
     d.exec("ROLLBACK");
     throw e;
   }
-  bm25Cache = null;
+  invalidateBM25();
   return opts.chunks.length;
 }
 
@@ -149,18 +149,31 @@ interface BM25Cache {
   count: number;
 }
 let bm25Cache: BM25Cache | null = null;
+let bm25Promise: Promise<BM25Cache> | null = null;
+let bm25Count = -1;
 
-function getBM25(d: DatabaseSync): BM25Cache {
+function getBM25(d: DatabaseSync): Promise<BM25Cache> {
   const count = Number((d.prepare("SELECT count(*) AS c FROM chunks").get() as any).c);
-  if (bm25Cache && bm25Cache.count === count) return bm25Cache;
-  const rows = d.prepare("SELECT chunk_id, doc, page, section, text FROM chunks ORDER BY chunk_id").all() as any[];
-  const idToChunkId = rows.map((r) => Number(r.chunk_id));
-  const meta = new Map<number, { doc: string; page: number; section: string }>();
-  rows.forEach((r) => meta.set(Number(r.chunk_id), { doc: String(r.doc), page: Number(r.page), section: String(r.section) }));
-  const index = buildBM25(rows.map((r, i) => ({ id: i, text: String(r.text) })));
-  index.chunks = index.chunks.map((c) => ({ id: c.id, text: "" })); // drop text copies; search needs only length/postings
-  bm25Cache = { index, idToChunkId, meta, count };
-  return bm25Cache;
+  if (bm25Promise && bm25Count === count) return bm25Promise;
+  bm25Count = count;
+  bm25Promise = (async () => {
+    if (bm25Cache && bm25Cache.count === count) return bm25Cache;
+    const rows = d.prepare("SELECT chunk_id, doc, page, section, text FROM chunks ORDER BY chunk_id").all() as any[];
+    const idToChunkId = rows.map((r) => Number(r.chunk_id));
+    const meta = new Map<number, { doc: string; page: number; section: string }>();
+    rows.forEach((r) => meta.set(Number(r.chunk_id), { doc: String(r.doc), page: Number(r.page), section: String(r.section) }));
+    const index = await buildBM25Async(rows.map((r, i) => ({ id: i, text: String(r.text) })));
+    index.chunks = index.chunks.map((c) => ({ id: c.id, text: "" })); // drop text copies; search needs only length/postings
+    bm25Cache = { index, idToChunkId, meta, count };
+    return bm25Cache;
+  })();
+  return bm25Promise;
+}
+
+function invalidateBM25(): void {
+  bm25Cache = null;
+  bm25Promise = null;
+  bm25Count = -1;
 }
 
 export interface QueryEmbed {
@@ -169,28 +182,33 @@ export interface QueryEmbed {
 }
 
 // Query embedding uses the SAME BGE-M3 build as the indexed docs (FlagEmbedding, served by
-// EMBED_BASE_URL). Returns dense (1024) + learned-sparse lexical weights.
+// EMBED_BASE_URL). Returns dense (1024) + learned-sparse lexical weights. Retries once with a
+// short backoff: the embed server is reached over an SSH tunnel and occasionally drops a
+// kept-alive connection, which otherwise surfaces as a spurious "keyword-only" search.
 async function embedQuery(text: string): Promise<QueryEmbed> {
-  try {
-    const res = await fetch(`${EMBED_BASE_URL}/embed`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ texts: [text], return_sparse: true }),
-      signal: AbortSignal.timeout(20000),
-    });
-    if (!res.ok) throw new Error(`embed HTTP ${res.status}`);
-    const j = await res.json();
-    const dense = new Float32Array(j.dense[0]);
-    const sparse = new Map<string, number>();
-    for (const [t, w] of Object.entries(j.sparse?.[0] ?? {})) sparse.set(t, w as number);
-    return { dense, sparse };
-  } catch {
-    // No local vector fallback on purpose: the stored vectors are FlagEmbedding BGE-M3 fp16.
-    // Any other build (Xenova q8, ollama bge-m3, …) is a *different embedding manifold*, so its
-    // cosine scores against the stored vectors are meaningless: better to drop the dense+sparse
-    // legs than to return silently-wrong rankings. BM25 still covers the query.
-    return { dense: null, sparse: new Map() };
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const res = await fetch(`${EMBED_BASE_URL}/embed`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ texts: [text], return_sparse: true }),
+        signal: AbortSignal.timeout(20000),
+      });
+      if (!res.ok) throw new Error(`embed HTTP ${res.status}`);
+      const j = await res.json();
+      const dense = new Float32Array(j.dense[0]);
+      const sparse = new Map<string, number>();
+      for (const [t, w] of Object.entries(j.sparse?.[0] ?? {})) sparse.set(t, w as number);
+      return { dense, sparse };
+    } catch {
+      if (attempt === 1) await new Promise((r) => setTimeout(r, 250));
+    }
   }
+  // No local vector fallback on purpose: the stored vectors are FlagEmbedding BGE-M3 fp16.
+  // Any other build (Xenova q8, ollama bge-m3, …) is a *different embedding manifold*, so its
+  // cosine scores against the stored vectors are meaningless: better to drop the dense+sparse
+  // legs than to return silently-wrong rankings. BM25 still covers the query.
+  return { dense: null, sparse: new Map() };
 }
 
 // Learned-sparse retrieval: inner product of query term weights and doc term weights via the
@@ -208,22 +226,44 @@ function sparseSearch(d: DatabaseSync, qs: Map<string, number>, kk: number, allo
   return [...scores.entries()].sort((a, b) => b[1] - a[1]).slice(0, kk * 4).map(([id, score]) => ({ id, score }));
 }
 
-function denseTopK(d: DatabaseSync, qvec: Float32Array, kk: number, allowed: (cid: number) => boolean): Array<{ id: number; score: number }> {
+// Exact dense top-k over vec_chunks (sqlite-vec vec0, float32, cosine distance).
+// sqlite-vec caps a KNN probe at k = 4096 ("k value in knn query too large"), so:
+//   * loose filters (≈ the whole corpus) use the brute-force MATCH KNN (k ≤ 4096, exact)
+//     and then intersect with the filter — the top-4096 window yields far more than kk
+//     allowed chunks, so the cap never matters here;
+//   * tight filters (a doc, a page range) may not surface kk allowed chunks within the
+//     top-4096 window, so the small allowed subset is ranked exactly in JS instead —
+//     no cap, and fast because few vectors are touched.
+function denseTopK(d: DatabaseSync, qvec: Float32Array, kk: number, allowedIds: number[], allowedSet: Set<number>): Array<{ id: number; score: number }> {
   const total = Number((d.prepare("SELECT count(*) AS c FROM vec_chunks").get() as any).c);
-  if (!total) return [];
+  if (!total || !allowedIds.length) return [];
   const q = Buffer.from(qvec.buffer, qvec.byteOffset, qvec.byteLength);
-  const run = (k: number) =>
-    (d.prepare("SELECT chunk_id, distance FROM vec_chunks WHERE embedding MATCH ? AND k = ?").all(q, k) as any[]).map((r) => ({
-      id: Number(r.chunk_id),
-      dist: Number(r.distance),
-    }));
-  let rows = run(Math.min(total, Math.max(kk * 40, 2000)));
-  let filtered = rows.filter((r) => allowed(r.id));
-  if (filtered.length < kk && rows.length < total) {
-    rows = run(Math.min(total, 8000));
-    filtered = rows.filter((r) => allowed(r.id));
+  const rows = (d.prepare("SELECT chunk_id, distance FROM vec_chunks WHERE embedding MATCH ? AND k = ?").all(q, Math.min(total, 4096)) as any[]).map((r) => ({
+    id: Number(r.chunk_id),
+    dist: Number(r.distance),
+  }));
+  let filtered = rows.filter((r) => allowedSet.has(r.id));
+
+  if (filtered.length < kk) {
+    // Tight filter: rank the allowed subset exactly.
+    const qn = Math.sqrt(qvec.reduce((s, x) => s + x * x, 0));
+    const stmt = d.prepare("SELECT embedding FROM vec_chunks WHERE chunk_id = ?");
+    const out: Array<{ id: number; dist: number }> = [];
+    for (const cid of allowedIds) {
+      try {
+        const r = stmt.get(BigInt(cid)) as any;
+        if (!r?.embedding) continue;
+        const b = Buffer.from(r.embedding);
+        const v = new Float32Array(b.buffer, b.byteOffset, Math.floor(b.byteLength / 4));
+        let dot = 0, na = 0;
+        for (let i = 0; i < v.length; i++) { dot += v[i] * qvec[i]; na += v[i] * v[i]; }
+        const nv = Math.sqrt(na);
+        out.push({ id: cid, dist: nv && qn ? 1 - dot / (nv * qn) : 1 });
+      } catch { /* skip */ }
+    }
+    out.sort((a, b) => a.dist - b.dist);
+    filtered = out.slice(0, kk);
   }
-  filtered.sort((a, b) => a.dist - b.dist);
   return filtered.slice(0, kk).map((r) => ({ id: r.id, score: Number((1 - r.dist).toFixed(4)) }));
 }
 
@@ -285,7 +325,7 @@ export async function searchDocuments(
   }
 
   const allowedSet = opts.docs && opts.docs.length ? new Set(opts.docs) : null;
-  const bm = getBM25(d);
+  const bm = await getBM25(d);
   const allowed = (cid: number): boolean => {
     const m = bm.meta.get(cid);
     if (!m) return false;
@@ -297,12 +337,15 @@ export async function searchDocuments(
   };
 
   // query embedding (dense + learned-sparse), same BGE-M3 build as the indexed docs
+  const allowedIds: number[] = [];
+  for (const cid of bm.meta.keys()) if (allowed(cid)) allowedIds.push(cid);
+  const allowedIdSet = new Set(allowedIds);
   const qe = await embedQuery(query);
   let dense: Array<{ id: number; score: number }> = [];
   let denseOk = false;
   if (qe.dense) {
     try {
-      dense = denseTopK(d, qe.dense, Math.max(kk * 4, 20), allowed);
+      dense = denseTopK(d, qe.dense, Math.max(kk * 4, 20), allowedIds, allowedIdSet);
       denseOk = true;
     } catch {
       denseOk = false;
@@ -535,7 +578,7 @@ export function importKb(src: string, opts: { replace?: boolean } = {}): { docs:
       }
     } finally {
       d.exec("CREATE INDEX IF NOT EXISTS idx_sparse_term ON sparse_terms(term);");
-      bm25Cache = null; // invalidate keyword cache
+      invalidateBM25();
     }
     return { docs, chunks, skipped };
   } finally {

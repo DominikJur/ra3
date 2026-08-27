@@ -1,14 +1,28 @@
 // PDF extraction with font-aware line grouping, section detection, chunking, and page rendering.
 import path from "node:path";
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 
 export interface Line { page: number; text: string; size: number; bold: boolean; }
 export interface Section { heading: string; page: number; text: string; }
 export interface ChunkSpec { page: number; section: string; text: string; }
 
 function fontsDir(): string | undefined {
-  if (typeof __dirname !== "undefined") {
-    return path.join(__dirname, "..", "node_modules", "pdfjs-dist", "standard_fonts");
-  }
+  // Resolve pdfjs-dist's `standard_fonts` directory via Node module resolution instead of a
+  // hard-coded relative path: this works under both pi's CJS bundler (__filename) and bare
+  // node ESM (import.meta.url), and regardless of whether node_modules is hoisted or nested.
+  // pdfjs concatenates `standardFontDataUrl + filename` and reads it with fs.readFile in Node,
+  // so the baseUrl must be a filesystem path ending in a separator (a file:// URL or a missing
+  // trailing slash both break the fetch and emit the "fetchStandardFontData … LiberationSans-
+  // Regular.ttf" warning).
+  try {
+    const base = typeof __filename === "string" ? __filename : import.meta.url;
+    const req = createRequire(base);
+    const dir = path.join(path.dirname(req.resolve("pdfjs-dist/package.json")), "standard_fonts");
+    if (existsSync(path.join(dir, "LiberationSans-Regular.ttf"))) {
+      return dir + path.sep;
+    }
+  } catch { /* ignore: leave standardFontDataUrl undefined */ }
   return undefined;
 }
 
