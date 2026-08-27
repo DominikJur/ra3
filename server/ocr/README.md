@@ -14,11 +14,17 @@ emits `<!-- page N -->` markers, so KB page numbers stay correct.
 
 ```text
 GET  /health     -> {"ok": true, "ocr": "marker/surya-2"}
-POST /file_parse multipart: files (PDF) -> {"results": {"<stem>": {"md_content": "..."}}}
+POST /file_parse multipart: files (PDF) -> {"results": {"<stem>": {"md_content": "..."}}}   (sync)
+POST /jobs       multipart: files (PDF) -> {"job_id": "...", "status": "queued"}          (async, storm-safe)
+GET  /jobs/<id>  -> {"status": "queued|processing|done|error", "md_content": "...", ...}
 ```
 
 `md_content` is markdown with `<!-- page N -->` markers separating pages. `lib/ocr.ts` splits on
 those markers, so no client changes are needed for correct page numbers.
+
+The client uses the **async** `/jobs` flow first (one upload, server computes in the background,
+client polls with tiny requests) and falls back to sync `/file_parse` for servers without `/jobs`
+(e.g. ocr-light). Async survives VPN/tunnel flap storms: every step needs only a short connection.
 
 ## Deployment (user-space, no sudo — e.g. a GPU box with `uv`)
 
@@ -35,21 +41,31 @@ docker-spawning):
 
 ```bash
 uv venv ~/vllm-venv --python 3.12 && source ~/vllm-venv/bin/activate && uv pip install vllm
-export CUDA_HOME=/opt/cuda PATH=$HOME/vllm-venv/bin:$PATH   # adjust; nvcc must be findable
+# NB: gcc-15 symlinks + ninja pip wheel required for flashinfer JIT (see below)
+export CUDA_HOME=/opt/cuda PATH=$HOME/vllm-venv/bin:$HOME/bin:/opt/cuda/bin:$PATH
+export PATH=$HOME/bin:$PATH   # ~/bin has gcc -> gcc-15, g++ -> g++-15 symlinks
 vllm serve datalab-to/surya-ocr-2 \
   --dtype bfloat16 --max-model-len 18000 --gpu-memory-utilization 0.7 \
   --enable-prefix-caching \
-  --mm-processor-kwargs '{"min_pixels": 3136, "max_pixels": 6291456}' \
+  --limit-mm-per-prompt '{"image": 4, "video": 0}' \
   --served-model-name datalab-to/surya-ocr-2 --port 8000
 ```
 
 Notes from a real deployment (RTX 5060 Ti 16 GB, Arch, GCC 16):
+- **`--limit-mm-per-prompt '{"image": 4, "video": 0}'` is essential**: without it vLLM
+  pre-allocates the vision encoder cache for a 14-frame *video* item (114k tokens, ~9.5 GiB) and
+  the KV cache budget goes negative ("No available memory for the cache blocks"). With video
+  disabled the encoder cache is 16k tokens and KV cache gets ~7.5 GiB.
 - `--gpu-memory-utilization` must fit the free VRAM; 0.7 was needed with ~2.5 GB used by other
-  processes (vLLM refuses to start if free memory < util × total).
+  processes. 0.8 OOMs during torch.compile (needs headroom).
+- MTP/speculative decoding (`--speculative-config '{"method":"mtp","num_speculative_tokens":2}'`)
+  does NOT fit on 16 GB with this hybrid Mamba model (KV cache budget goes negative); skip it.
 - flashinfer JIT-compiles kernels on first run and needs `ninja` (pip wheel) + `nvcc` on PATH.
-  With GCC 16 the build can fail (`__self` errors) — use GCC 15 if installed (`PATH`-prepend a
+  With GCC 16 the build can fail (`__self` errors) — use GCC 15 if installed (PATH-preprend a
   dir with `gcc -> gcc-15`, `g++ -> g++-15` symlinks).
 - First run downloads the Surya 2 weights into `~/.cache/huggingface` (~1–2 GB).
+- Measured: ~2.7 s/page marginal on a 5060 Ti (10 pages in ~27 s, warm server) — the first
+  page pays ~15–20 s of one-time startup.
 
 Then run the server (port 8002 = `OCR_BASE_URL` default):
 

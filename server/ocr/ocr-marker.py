@@ -17,9 +17,13 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
+import uuid
 from html import unescape
 from fastapi import FastAPI, File, UploadFile
 
@@ -28,6 +32,9 @@ app = FastAPI()
 # marker_single lives in the same venv as this server; resolve it explicitly so
 # PATH doesn't matter.
 MARKER_BIN = os.environ.get("MARKER_BIN") or os.path.join(os.path.dirname(sys.executable), "marker_single")
+JOBS_DIR = os.environ.get("OCR_JOBS_DIR", os.path.expanduser("~/.ocr-jobs"))
+os.makedirs(JOBS_DIR, exist_ok=True)
+JOB_LOCK = threading.Lock()  # serialize marker runs: one GPU job at a time
 
 OCR_TIMEOUT = int(os.environ.get("OCR_TIMEOUT", "7200"))  # seconds per file
 
@@ -155,6 +162,82 @@ async def file_parse(files: list[UploadFile] = File(...)):
                 md = f"<!-- marker failed: {e.stderr.decode('utf-8', 'replace')[:500]} -->"
             out[stem] = {"md_content": md}
     return {"results": out}
+
+
+# ---- async jobs: one upload, server computes, client polls ------------------
+# Storm-friendly: POST /jobs returns the job id immediately (short tunnel
+# window), the work runs here regardless of the tunnel, and GET /jobs/{id}
+# answers with tiny requests whenever the client can get through. Results and
+# state are persisted under JOBS_DIR, so jobs survive a server restart too.
+
+def _job_path(job_id: str) -> str:
+    return os.path.join(JOBS_DIR, job_id)
+
+
+def _write_state(job_id: str, **fields) -> None:
+    p = os.path.join(_job_path(job_id), "state.json")
+    try:
+        st = {}
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as fh:
+                st = json.load(fh)
+        st.update(fields)
+        st["updatedAt"] = time.time()
+        with open(p, "w", encoding="utf-8") as fh:
+            json.dump(st, fh)
+    except Exception:
+        pass
+
+
+def _run_job_worker(job_id: str, pdf_path: str, stem: str) -> None:
+    try:
+        _write_state(job_id, status="processing", startedAt=time.time())
+        with JOB_LOCK:
+            md = run_marker(pdf_path, os.path.join(_job_path(job_id), "out"), stem)
+        _write_state(job_id, status="done", md_content=md, finishedAt=time.time())
+    except subprocess.TimeoutExpired:
+        _write_state(job_id, status="error", error=f"marker timeout after {OCR_TIMEOUT}s")
+    except Exception as e:  # noqa: BLE001
+        _write_state(job_id, status="error", error=str(e))
+    finally:
+        # keep input.pdf for debugging; drop the marker output tree
+        shutil.rmtree(os.path.join(_job_path(job_id), "out"), ignore_errors=True)
+
+
+@app.post("/jobs")
+async def create_job(files: list[UploadFile] = File(...)):
+    job_id = uuid.uuid4().hex[:12]
+    d = _job_path(job_id)
+    os.makedirs(d, exist_ok=True)
+    f = files[0]
+    data = await f.read()
+    name = f.filename or "doc.pdf"
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    pdf_path = os.path.join(d, "input.pdf")
+    with open(pdf_path, "wb") as fh:
+        fh.write(data)
+    _write_state(job_id, status="queued", label=name, stem=stem, createdAt=time.time())
+    threading.Thread(target=_run_job_worker, args=(job_id, pdf_path, stem), daemon=True).start()
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.get("/jobs/{job_id}")
+async def get_job(job_id: str):
+    d = _job_path(job_id)
+    if not os.path.isdir(d) or not re.fullmatch(r"[0-9a-f]{12}", job_id):
+        return {"status": "not_found"}
+    with open(os.path.join(d, "state.json"), encoding="utf-8") as fh:
+        st = json.load(fh)
+    # keep the response small: md_content only when done
+    return {
+        "job_id": job_id,
+        "status": st.get("status"),
+        "label": st.get("label"),
+        "md_content": st.get("md_content"),
+        "error": st.get("error"),
+        "createdAt": st.get("createdAt"),
+        "finishedAt": st.get("finishedAt"),
+    }
 
 
 if __name__ == "__main__":

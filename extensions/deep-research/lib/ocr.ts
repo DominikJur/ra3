@@ -94,19 +94,81 @@ export function markdownToSections(md: string): OcrSection[] {
   return sections.length ? sections : [{ heading: "", page: 1, text: md }];
 }
 
+const OCR_JOB_TIMEOUT_MS = 150 * 60 * 1000; // client cap; server OCR_TIMEOUT defaults to 7200s
+const OCR_POLL_MS = 15_000;
+
+function mdResult(md: string) {
+  return { sections: markdownToSections(md), pageCount: sectionsPageGuess(md) };
+}
+
+// Storm-friendly OCR: POST /jobs (async) returns a job id immediately, server
+// computes in the background, and we poll GET /jobs/{id} with tiny requests —
+// each poll needs only a short tunnel window, so VPN flap storms can't kill a
+// 20-minute OCR run. Falls back to the sync /file_parse contract for servers
+// that don't implement /jobs (e.g. ocr-light/Tesseract).
 export async function ocrPdf(
   buf: Uint8Array,
   baseUrl: string,
   progress?: (msg: string) => void,
 ): Promise<{ sections: OcrSection[]; pageCount: number }> {
-  progress?.("Submitting to OCR server (Marker 2/Surya; this can take a while)...");
-  const fd = new FormData();
-  fd.append("files", new Blob([buf as unknown as BlobPart], { type: "application/pdf" }), "paper.pdf");
-  // Marker 2 (server/ocr/) and Tesseract (server/ocr-light/) both use only the
-  // files field; MinerU-specific fields (backend/parse_method/...) are gone.
+  const makeFd = () => {
+    const fd = new FormData();
+    fd.append("files", new Blob([buf as unknown as BlobPart], { type: "application/pdf" }), "paper.pdf");
+    return fd;
+  };
+
+  // 1) async job: single upload, immediate job_id
+  let jobId: string | null = null;
+  try {
+    progress?.("Submitting OCR job to server (async; upload once, result when ready)...");
+    const resp = await fetch(`${baseUrl}/jobs`, {
+      method: "POST",
+      body: makeFd(),
+      signal: AbortSignal.timeout(120_000),
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      jobId = typeof data?.job_id === "string" ? data.job_id : null;
+    }
+    // !resp.ok (404/405) → server predates /jobs: fall through to sync path
+  } catch {
+    // network failure (tunnel down): let the caller (queue) retry — the job
+    // was never accepted, nothing is lost
+    throw new Error("OCR job submission failed (server unreachable)");
+  }
+
+  if (jobId) {
+    // 2) poll with tiny requests; survive long tunnel outages within the deadline
+    const deadline = Date.now() + OCR_JOB_TIMEOUT_MS;
+    let lastStatus = "queued";
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, OCR_POLL_MS));
+      try {
+        const r = await fetch(`${baseUrl}/jobs/${jobId}`, { signal: AbortSignal.timeout(15_000) });
+        if (!r.ok) continue; // transient server hiccup: keep polling
+        const st = await r.json();
+        lastStatus = st?.status ?? lastStatus;
+        if (lastStatus === "done" && typeof st?.md_content === "string" && st.md_content.trim()) {
+          progress?.("OCR complete (async job)");
+          return mdResult(st.md_content);
+        }
+        if (lastStatus === "error") {
+          throw new Error(`OCR job failed: ${st?.error ?? "unknown error"}`);
+        }
+        progress?.(`OCR job ${lastStatus} on server (${Math.round((Date.now() - (deadline - OCR_JOB_TIMEOUT_MS)) / 1000)}s elapsed)...`);
+      } catch (e) {
+        if (e instanceof Error && /OCR job failed/.test(e.message)) throw e;
+        progress?.("OCR server unreachable while polling — will retry...");
+      }
+    }
+    throw new Error(`OCR job ${jobId} timed out after ${Math.round(OCR_JOB_TIMEOUT_MS / 60000)} min (last status: ${lastStatus})`);
+  }
+
+  // 3) sync fallback (servers without /jobs)
+  progress?.("Submitting to OCR server (sync /file_parse)...");
   const resp = await fetch(`${baseUrl}/file_parse`, {
     method: "POST",
-    body: fd,
+    body: makeFd(),
     signal: AbortSignal.timeout(30 * 60 * 1000),
   });
   if (!resp.ok) {
@@ -124,7 +186,7 @@ export async function ocrPdf(
   if (typeof md !== "string" || !md.trim()) {
     throw new Error("OCR returned no markdown content");
   }
-  return { sections: markdownToSections(md), pageCount: sectionsPageGuess(md) };
+  return mdResult(md);
 }
 
 // Best-effort page count from the markdown (used for docs.pages metadata only).
