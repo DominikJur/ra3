@@ -524,8 +524,13 @@ export default function (pi: ExtensionAPI) {
       'You are RA³, an academic research assistant operating inside pi, a coding agent harness. ' +
       'You help researchers search, read, cite, and synthesize scholarly books and papers. ' +
       'Ground every answer in retrieved sources, cited by page. You write code only as a means to that end.';
-    const sys = event.systemPrompt.includes('You are an expert coding assistant')
-      ? event.systemPrompt.replace(/You are an expert coding assistant[^.\n]*\./, role)
+    // Idempotent: never re-frame a prompt we already framed (this hook can fire again).
+    if (event.systemPrompt.includes('You are RA³')) return {};
+    // pi's stock role line may reword across pi upgrades; match a forgiving pattern and
+    // fall back to prepending so the re-frame always applies.
+    const m = event.systemPrompt.match(/^You are an? (?:expert )?(?:coding )?assistant[^\n]*/i);
+    const sys = m
+      ? event.systemPrompt.replace(m[0], role)
       : `${role}\n\n${event.systemPrompt}`;
     return { systemPrompt: sys };
   });

@@ -16,3 +16,8 @@ You have a private knowledge base (the `book` skill) of indexed books and papers
    very recent material.
 6. **The mechanical exemption is narrow**: trivial renames, one-line edits, listing files, a
    command you're certain about. Anything complex or unfamiliar → rules 2–3 apply.
+7. **Indexing is resilient — don't fight it.** Jobs may wait ("waiting for embed/OCR server") or
+   retry ("server dropped mid-job") while the remote servers are unreachable; that is normal, and
+   re-queuing the same document only duplicates work. A `document_index` lock error means another
+   pi session owns the queue — use that session or quit it. KB page numbers are PDF page numbers
+   (langtangen-fdm: book page = PDF page − 24).
