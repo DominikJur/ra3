@@ -206,7 +206,8 @@ Notes:
 | var | default | meaning |
 |---|---|---|
 | `EMBED_BASE_URL` | `http://localhost:8001` | BGE-M3 dense+sparse embed server |
-| `OCR_BASE_URL` | `http://localhost:8002` | OCR server for scanned PDFs (optional): MinerU (`server/ocr/`) or Tesseract (`server/ocr-light/`) |
+| `OCR_BASE_URL` | `http://localhost:8002` | OCR server (recommended: Marker 2 `server/ocr-marker/`; also MinerU `server/ocr/`, Tesseract `server/ocr-light/`) |
+| `OCR_MODE` | `always` | when OCR runs: `always` (every doc, exact math) · `auto` (scanned only) · `off` |
 | `KB_ROOT` | `~/pi_research/books` | where `kb.sqlite` + per-doc dirs live |
 | `S2_API_KEY` |: | Semantic Scholar API key (avoids rate limits) |
 | `UNPAYWALL_EMAIL` |: | email for the Unpaywall API |

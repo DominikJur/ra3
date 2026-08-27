@@ -172,7 +172,7 @@ function looksLikePdf(buf: Buffer): boolean {
 }
 
 export async function fetchPdfByDoi(doi: string, signal?: AbortSignal): Promise<Buffer> {
-  const d = doi.trim().replace(/^https?:\/\/doi\.org\//i, "");
+  const d = doi.trim().replace(/^https?:\/\/doi\.org\//i, "").replace(/^arXiv:/i, "");
   const candidates: string[] = [];
   if (/^\d{4}\.\d{4,5}(v\d+)?$/i.test(d)) candidates.push(`https://arxiv.org/pdf/${d}`);
 

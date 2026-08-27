@@ -26,7 +26,7 @@ import {
 } from "./lib/shared.ts";
 import { extractPdf, renderPages, chunkSections } from "./lib/chunk.ts";
 import { embedTexts, ingestChunks, searchDocuments, listDocuments, exportKb, importKb, docDir, getPageText } from "./lib/kb-sqlite.ts";
-import { ocrBaseUrl, isScannedPdf, ocrPdf } from "./lib/ocr.ts";
+import { ocrBaseUrl, ocrMode, isScannedPdf, ocrPdf } from "./lib/ocr.ts";
 
 // Render a tool call's input arguments in the TUI. Without a renderCall, pi
 // only shows the tool name, so the agent's inputs are invisible to the user.
@@ -100,8 +100,10 @@ async function indexDoc(params: any, progress: (msg: string) => void): Promise<a
   progress("Extracting text + chunking...");
   let { sections, pageCount } = await extractPdf(new Uint8Array(buf));
   const ocrUrl = ocrBaseUrl();
-  if (ocrUrl && (params.forceOcr || isScannedPdf(sections, pageCount))) {
-    progress(params.forceOcr ? "forceOcr set: routing to MinerU OCR..." : "Low text density: routing to MinerU OCR...");
+  const mode = ocrMode();
+  const wantOcr = mode === "always" || (mode === "auto" && isScannedPdf(sections, pageCount));
+  if (ocrUrl && wantOcr) {
+    progress(mode === "always" ? "OCR enabled (OCR_MODE=always): routing to OCR server..." : "Low text density: routing to OCR server...");
     try {
       ({ sections, pageCount } = await ocrPdf(buf, ocrUrl, progress));
       progress(`OCR complete: ${pageCount} pages, ${sections.reduce((a, s) => a + s.text.length, 0)} chars`);
@@ -132,7 +134,6 @@ interface IndexJob {
   name?: string;   // explicit slug passed through to indexDoc
   source: string;
   reindex: boolean;
-  forceOcr: boolean;
   status: "queued" | "processing" | "done" | "error";
   progress: string;
   chunks?: number;
@@ -217,7 +218,7 @@ async function pumpQueue(): Promise<void> {
       refreshQueueUi();
       try {
         const result = await indexDoc(
-          { source: job.source, name: job.name, reindex: job.reindex, forceOcr: job.forceOcr },
+          { source: job.source, name: job.name, reindex: job.reindex },
           (msg) => { job.progress = msg; refreshQueueUi(); },
         );
         job.status = "done";
@@ -247,7 +248,6 @@ function enqueueIndexJob(params: any): IndexJob {
     name,
     source: src,
     reindex: !!params.reindex,
-    forceOcr: !!params.forceOcr,
     status: "queued",
     progress: "queued",
     queuedAt: Date.now(),
@@ -515,18 +515,17 @@ export default function (pi: ExtensionAPI) {
     label: "Index Document",
     renderCall: renderToolCall,
     description:
-      "Index a PDF (path, URL, DOI, or arXiv id) into the knowledge base. Runs in the background: queues the job and returns immediately; searchable when it finishes. Text PDFs are extracted locally (pdfjs); scanned PDFs (or forceOcr=true) route to MinerU OCR if OCR_BASE_URL is set.",
+      "Index a PDF (path, URL, DOI, or arXiv id) into the knowledge base. Runs in the background: queues the job and returns immediately; searchable when it finishes. Every PDF routes to the OCR server (OCR_MODE=always by default) for exact math; set OCR_MODE=auto/off via env to change.",
     promptSnippet: "Index a PDF into the knowledge base (background)",
     promptGuidelines: [
       "Asynchronous: queues and returns immediately. Watch document_status for progress.",
       "Queue papers as soon as you find them (don't batch at the end).",
-      "Pass forceOcr=true to run MinerU OCR even on text PDFs (use when pdfjs mangles the math; needs OCR_BASE_URL).",
+      "OCR runs on every document by default (settings-driven via OCR_MODE env); no per-call OCR flag.",
     ],
     parameters: Type.Object({
       source: Type.String({ description: "Local path, https URL, DOI, or arXiv id of the PDF." }),
       name: Type.Optional(Type.String({ description: "Optional slug/name for the document (defaults to filename/DOI)." })),
       reindex: Type.Optional(Type.Boolean({ description: "Replace any existing chunks for this document (default false)." })),
-      forceOcr: Type.Optional(Type.Boolean({ description: "Force MinerU OCR even on text PDFs (preserves math; slower; needs OCR_BASE_URL)." })),
     }),
     async execute(_id: string, params: any, _signal?: AbortSignal, _onUpdate?: any, ctx?: any) {
       try {

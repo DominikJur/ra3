@@ -16,5 +16,5 @@ description: Local knowledge base over indexed books and papers. Index PDFs and 
 
 ## Rules
 - Index once, search many times; `reindex: true` only to replace a stale copy.
-- Scanned PDFs are auto-OCR'd on index (slow).
+- Every doc is OCR'd on index by default (`OCR_MODE=always`) so equations are exact; slow but one-time.
 - Storage: `~/pi_research/books/<slug>/` (raw PDF) + `kb.sqlite` (docs, chunks, vectors).

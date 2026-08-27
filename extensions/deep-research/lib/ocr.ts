@@ -19,6 +19,15 @@ export function ocrBaseUrl(): string | undefined {
   return u || undefined;
 }
 
+// When to run OCR on a document. Settings-driven (env), NOT an agent parameter:
+//   "always" (default) — every doc goes through the OCR server (exact math everywhere)
+//   "auto"             — only scanned/image PDFs (pdfjs text density below the threshold)
+//   "off"              — never OCR
+export function ocrMode(): "always" | "auto" | "off" {
+  const m = (process.env.OCR_MODE ?? "always").trim().toLowerCase();
+  return m === "auto" ? "auto" : m === "off" ? "off" : "always";
+}
+
 const MIN_CHARS_PER_PAGE = 40;
 
 // A PDF is "scanned" if pdfjs produced very little text per page (image-only
