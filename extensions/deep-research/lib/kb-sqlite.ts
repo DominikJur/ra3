@@ -7,10 +7,12 @@
 // unreachable, search degrades honestly to keyword-only (BM25).
 import { DatabaseSync } from "node:sqlite";
 import * as sqliteVec from "sqlite-vec";
+import { Worker } from "node:worker_threads";
 import { mkdirSync, copyFileSync, statSync, existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { gzipSync, gunzipSync } from "node:zlib";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { buildBM25Async, bm25Search, type BM25Index } from "./lexical.ts";
 import { simpleHash } from "./shared.ts";
 
@@ -311,7 +313,54 @@ function mmr(candidates: Array<[number, number]>, k: number, sim: (a: number, b:
   return chosen;
 }
 
+// ---- search worker ---------------------------------------------------------
+// The search legs (sqlite-vec KNN, learned-sparse, BM25) are synchronous SQLite calls that
+// block pi's event loop: ~0.5 s KNN + ~0.15 s sparse on a 42k-chunk KB, plus ~0.8 s once to
+// pull chunks for the BM25 index. Run the whole search in a worker thread so the TUI stays
+// responsive; the worker imports runSearchDocuments (below) and does embed + legs + fusion.
+
+const searchWorkerUrl = path.join(path.dirname(fileURLToPath(import.meta.url)), "search-worker.mjs");
+
+let searchWorker: Worker | null = null;
+let searchReqId = 1;
+const searchPending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
+
+function getSearchWorker(): Worker {
+  if (searchWorker) return searchWorker;
+  const w = new Worker(searchWorkerUrl);
+  w.on("message", (msg: any) => {
+    const p = searchPending.get(msg?.id);
+    if (!p) return;
+    searchPending.delete(msg.id);
+    if (msg.ok) p.resolve(msg.result);
+    else p.reject(new Error(msg.error || "search worker failed"));
+  });
+  w.on("error", (e) => {
+    for (const [, p] of searchPending) p.reject(e);
+    searchPending.clear();
+    searchWorker = null;
+  });
+  w.on("exit", () => { searchWorker = null; });
+  searchWorker = w;
+  return w;
+}
+
+function callSearchWorker(type: string, payload: any): Promise<any> {
+  const id = searchReqId++;
+  return new Promise((resolve, reject) => {
+    searchPending.set(id, { resolve, reject });
+    getSearchWorker().postMessage({ id, type, ...payload });
+  });
+}
+
 export async function searchDocuments(
+  query: string,
+  opts: { k?: number; docs?: string[]; keyword?: boolean; pageFrom?: number; pageTo?: number; section?: string } = {},
+): Promise<any> {
+  return callSearchWorker("search", { query, opts });
+}
+
+export async function runSearchDocuments(
   query: string,
   opts: { k?: number; docs?: string[]; keyword?: boolean; pageFrom?: number; pageTo?: number; section?: string } = {},
 ): Promise<any> {
