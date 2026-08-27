@@ -25,8 +25,9 @@ description: Local knowledge base over indexed books and papers. Index PDFs and 
   queue is intentionally waiting out a VPN/tunnel outage. **Do NOT re-submit the same document**
   to "fix" it — that duplicates work (an OCR checkpoint already makes retries resume cheaply).
   It completes on its own as soon as the servers are reachable.
-- **Single-owner queue.** Only one pi session owns the indexing queue (ra3-queue.lock). If
-  `document_index` returns a lock error, another pi session is processing the queue: run
-  `document_index` in that session, or quit it and retry here. Don't retry in a loop.
+- **Any session can enqueue; jobs run exactly once.** The queue lives in SQLite
+  (ra3-queue.sqlite) and jobs are claimed transactionally, so it doesn't matter how many pi
+  sessions are open: `document_index` never fails with a lock error, and each job is processed
+  by exactly one session (a heartbeat lease requeues work from crashed sessions).
 - **Page numbers are PDF page numbers.** KB pages = the PDF's pages (OCR keeps them via
   per-page markers). Exception: `langtangen-fdm` — book page = PDF page − 24.

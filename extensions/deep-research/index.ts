@@ -7,16 +7,7 @@ import { Text, type Component } from '@earendil-works/pi-tui';
 import type { Theme } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import { promises as fs } from 'node:fs';
-import {
-  openSync,
-  writeSync,
-  closeSync,
-  statSync,
-  rmSync,
-  existsSync,
-  readFileSync,
-} from 'node:fs';
-import os from 'node:os';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import {
   fetchJson,
@@ -44,6 +35,18 @@ import {
   EMBED_BASE_URL,
 } from './lib/kb-sqlite.ts';
 import { ocrBaseUrl, ocrMode, isScannedPdf, ocrPdf } from './lib/ocr.ts';
+import {
+  enqueueJob,
+  claimNextJob,
+  updateJob,
+  heartbeatJob,
+  requeueStaleJobs,
+  hasDueJobs,
+  listActiveJobs,
+  listRecentJobs,
+  migrateLegacyQueueFile,
+  type QueueJob,
+} from './lib/queue.ts';
 
 // Render a tool call's input arguments in the TUI. Without a renderCall, pi
 // only shows the tool name, so the agent's inputs are invisible to the user.
@@ -214,24 +217,11 @@ async function indexDoc(params: any, progress: (msg: string) => void): Promise<a
 
 // ---- background indexing queue --------------------------------------------
 // document_index returns immediately; the heavy pipeline (resolve → extract → OCR →
-// embed → ingest) runs here, one job at a time, so the TUI stays responsive and several
-// books can be queued while the user keeps working. Progress shows in a widget + footer
-// status; completion/failure fires a notification.
-
-interface IndexJob {
-  id: number;
-  label: string; // display only (name or filename)
-  name?: string; // explicit slug passed through to indexDoc
-  source: string;
-  reindex: boolean;
-  status: 'queued' | 'processing' | 'done' | 'error';
-  progress: string;
-  chunks?: number;
-  error?: string;
-  queuedAt: number;
-  attempts?: number; // retry counter for storm-killed (network) failures
-  nextAttemptAt?: number; // epoch ms; the pump skips jobs not yet due
-}
+// embed → ingest) runs in the background. The queue lives in SQLite
+// (~/.pi/agent/ra3-queue.sqlite, WAL): ANY pi session can enqueue, and jobs are
+// *claimed* transactionally (BEGIN IMMEDIATE + CAS), so exactly one session runs
+// each job — no single-owner lock, no lock errors, no double-indexing. A
+// heartbeat lease requeues work from crashed sessions.
 
 // ---- storm resilience -----------------------------------------------------
 // The embed/OCR servers live on a remote GPU box reached over an SSH tunnel that
@@ -272,108 +262,16 @@ async function serversUp(): Promise<{ embed: boolean; ocr: boolean }> {
   return { embed, ocr };
 }
 
-const jobQueue: IndexJob[] = [];
-const jobsById = new Map<number, IndexJob>();
-let nextJobId = 1;
 let pumping = false;
 let sessionCtx: any = null; // stashed in session_start / first tool call
 
-// Queue state persists to ~/.pi/agent/ra3-queue.json so a pi restart resumes queued work
-// (an in-memory queue would silently drop books on restart). A lock file makes sure only ONE
-// pi session owns the queue: without it, two sessions both restoring + pumping double-index.
-const queueFile = path.join(os.homedir(), '.pi', 'agent', 'ra3-queue.json');
-const queueLockFile = path.join(os.homedir(), '.pi', 'agent', 'ra3-queue.lock');
-let restored = false;
-let queueOwner = false;
+// Legacy single-owner queue state (replaced by lib/queue.ts): no in-memory copy,
+// no lock file — the SQLite queue is the shared source of truth across sessions.
 
-// Take the queue lock (exclusive create). Stale locks (dead pid, or older than 10 min) are
-// stolen so a crashed session doesn't block the next one forever.
-function acquireQueueLock(): boolean {
-  const tryLock = (): boolean => {
-    try {
-      const fd = openSync(queueLockFile, 'wx');
-      writeSync(fd, JSON.stringify({ pid: process.pid, at: Date.now() }));
-      closeSync(fd);
-      return true;
-    } catch {
-      return false;
-    }
-  };
-  if (tryLock()) return true;
-  try {
-    let pidAlive = false;
-    try {
-      const l = JSON.parse(readFileSync(queueLockFile, 'utf8'));
-      if (l?.pid) {
-        process.kill(Number(l.pid), 0);
-        pidAlive = true;
-      }
-    } catch {
-      /* missing/corrupt lock, or dead pid: steal */
-    }
-    const st = statSync(queueLockFile);
-    if (!pidAlive || Date.now() - st.mtimeMs > 10 * 60 * 1000) {
-      rmSync(queueLockFile, { force: true });
-      return tryLock();
-    }
-  } catch {
-    /* raced */
-  }
-  return false;
-}
-
-// Lock lifetime = the session's lifetime: released implicitly when the pid dies
-// (stale-steal in acquireQueueLock) or after 10 min idle.
-
-async function persistQueue(): Promise<void> {
-  try {
-    const jobs = [...jobsById.values()];
-    const active = jobs.filter((j) => j.status === 'queued' || j.status === 'processing');
-    const finished = jobs.filter((j) => j.status === 'done' || j.status === 'error').slice(-20);
-    const toStore = [...active, ...finished];
-    await fs.mkdir(path.dirname(queueFile), { recursive: true });
-    const tmp = `${queueFile}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(toStore, null, 2));
-    await fs.rename(tmp, queueFile);
-  } catch {
-    /* persistence is best-effort; never break indexing */
-  }
-}
-
-async function restoreQueue(): Promise<void> {
-  if (restored) return;
-  restored = true;
-  // Only the session that holds the lock restores/processes the queue. Other sessions
-  // (spawned later, e.g. a second terminal) must not double-index.
-  queueOwner = acquireQueueLock();
-  if (!queueOwner) return;
-  try {
-    if (!existsSync(queueFile)) return;
-    const jobs = JSON.parse(await fs.readFile(queueFile, 'utf8')) as IndexJob[];
-    if (!Array.isArray(jobs)) return;
-    for (const j of jobs) {
-      if (j.status === 'processing') {
-        // interrupted by a previous shutdown: retry it
-        j.status = 'queued';
-        j.progress = 'queued (resumed after restart)';
-        j.nextAttemptAt = 0;
-      } else if (
-        j.status === 'error' &&
-        isRetryableError(j.error ?? '') &&
-        (j.attempts ?? 0) < MAX_ATTEMPTS
-      ) {
-        // died in a VPN/tunnel storm: resurrect it so results arrive when connectivity returns
-        j.status = 'queued';
-        j.progress = `re-queued after server drop (attempt ${j.attempts ?? 0})`;
-        j.nextAttemptAt = 0;
-      }
-      jobsById.set(j.id, j);
-      if (j.id >= nextJobId) nextJobId = j.id + 1;
-      if (j.status === 'queued') jobQueue.push(j);
-    }
-  } catch {
-    /* ignore corrupt/missing queue file */
-  }
+// One-time migration from the legacy JSON queue + resume of crashed-session work.
+function initQueue(): void {
+  migrateLegacyQueueFile();
+  requeueStaleJobs();
 }
 
 function notify(message: string, level: 'info' | 'warning' | 'error'): void {
@@ -387,19 +285,17 @@ function notify(message: string, level: 'info' | 'warning' | 'error'): void {
 function refreshQueueUi(): void {
   try {
     if (!sessionCtx?.ui) return;
-    const processing = [...jobsById.values()].filter((j) => j.status === 'processing');
-    const queued = [...jobsById.values()].filter((j) => j.status === 'queued');
-    const active = [...processing, ...queued];
+    const active = listActiveJobs();
     if (!active.length) {
       sessionCtx.ui.setWidget?.('ra3-kb', undefined);
       sessionCtx.ui.setStatus?.('ra3-kb', undefined);
       return;
     }
+    const processing = active.filter((j) => j.status === 'processing');
+    const queued = active.filter((j) => j.status === 'queued');
     const lines = active
       .slice(0, 6)
-      .map(
-        (j) => `[${j.status === 'processing' ? 'processing' : 'queued'}] ${j.label}: ${j.progress}`,
-      );
+      .map((j) => `[${j.status === 'processing' ? 'processing' : 'queued'}] ${j.label}: ${j.progress}`);
     if (active.length > 6) lines.push(`… +${active.length - 6} more`);
     sessionCtx.ui.setWidget?.('ra3-kb', lines);
     sessionCtx.ui.setStatus?.('ra3-kb', `indexing ${processing.length} · ${queued.length} queued`);
@@ -412,67 +308,78 @@ async function pumpQueue(): Promise<void> {
   if (pumping) return;
   pumping = true;
   try {
-    while (jobQueue.length) {
-      const now = Date.now();
-      const idx = jobQueue.findIndex((j) => (j.nextAttemptAt ?? 0) <= now);
-      if (idx === -1) {
-        // everything waiting on backoff: sleep until the earliest is due
+    for (;;) {
+      // crashed-session lease expiry: requeue jobs whose heartbeat went stale
+      requeueStaleJobs();
+      if (!hasDueJobs()) {
+        refreshQueueUi();
         await sleep(5_000);
         continue;
       }
-      const job = jobQueue.splice(idx, 1)[0];
-      if (!job.nextAttemptAt) job.nextAttemptAt = now;
 
-      // Health gate: never start a job while the servers are unreachable. The
-      // job simply waits (status stays queued) and runs when the storm clears.
+      // Health gate BEFORE claiming: never run a job while the servers are
+      // unreachable — the job stays queued and runs when the storm clears.
       const up = await serversUp();
       if (!up.embed || !up.ocr) {
-        job.status = 'queued';
-        job.progress = `waiting for ${!up.embed ? 'embed' : 'OCR'} server (tunnel/VPN down?) — will start automatically`;
-        job.nextAttemptAt = now + 20_000;
-        jobQueue.push(job);
         refreshQueueUi();
         await sleep(20_000);
         continue;
       }
 
-      job.status = 'processing';
-      await persistQueue();
+      // Transactional claim: exactly one session wins, even with several pi
+      // processes pumping concurrently.
+      const job = claimNextJob();
+      if (!job) {
+        await sleep(5_000);
+        continue;
+      }
       refreshQueueUi();
+
+      const heartbeatTimer = setInterval(() => {
+        try {
+          heartbeatJob(job.id);
+        } catch {
+          /* ignore */
+        }
+      }, 10_000);
       try {
         const result = await indexDoc(
           { source: job.source, name: job.name, reindex: job.reindex },
           (msg) => {
-            job.progress = msg;
+            updateJob(job.id, { progress: msg });
             refreshQueueUi();
           },
         );
-        job.status = 'done';
-        job.chunks = result.chunks;
-        await persistQueue();
+        updateJob(job.id, {
+          status: 'done',
+          chunks: result.chunks,
+          progress: `indexed ${result.chunks} chunks`,
+        });
         notify(`${job.label}: indexed ${result.chunks} chunks: searchable now`, 'info');
       } catch (e) {
         const msg = (e as Error).message;
-        if (isRetryableError(msg) && (job.attempts ?? 0) < MAX_ATTEMPTS) {
+        if (isRetryableError(msg) && job.attempts < MAX_ATTEMPTS) {
           // Server died mid-job (tunnel drop): back off and retry, don't fail.
           // The OCR checkpoint (docs/<slug>/ocr-sections.json) makes the retry
           // resume after OCR instead of re-running it.
-          job.attempts = (job.attempts ?? 0) + 1;
-          job.status = 'queued';
-          job.progress = `server dropped mid-job (${msg}) — retrying in ${Math.round(backoffMs(job.attempts) / 1000)}s (attempt ${job.attempts})`;
-          job.nextAttemptAt = Date.now() + backoffMs(job.attempts);
-          jobQueue.push(job);
-          await persistQueue();
+          const attempts = job.attempts + 1;
+          updateJob(job.id, {
+            status: 'queued',
+            attempts,
+            nextAttemptAt: Date.now() + backoffMs(attempts),
+            progress: `server dropped mid-job (${msg}) — retrying in ${Math.round(backoffMs(attempts) / 1000)}s (attempt ${attempts})`,
+            error: msg,
+          });
           notify(
             `${job.label}: server unreachable mid-job (${msg}) — will retry automatically`,
             'warning',
           );
         } else {
-          job.status = 'error';
-          job.error = msg;
-          await persistQueue();
+          updateJob(job.id, { status: 'error', error: msg, progress: 'failed' });
           notify(`${job.label}: indexing failed: ${msg}`, 'error');
         }
+      } finally {
+        clearInterval(heartbeatTimer);
       }
       refreshQueueUi();
     }
@@ -481,8 +388,7 @@ async function pumpQueue(): Promise<void> {
   }
 }
 
-async function enqueueIndexJob(params: any): Promise<IndexJob | null> {
-  if (!queueOwner) return null; // another pi session owns the queue; refuse to double-index
+function enqueueIndexJob(params: any): QueueJob {
   const src = String(params.source).trim();
   const name = params.name ? String(params.name) : undefined;
   const label =
@@ -492,19 +398,7 @@ async function enqueueIndexJob(params: any): Promise<IndexJob | null> {
       .pop()
       ?.replace(/\.pdf$/i, '') ||
       src);
-  const job: IndexJob = {
-    id: nextJobId++,
-    label,
-    name,
-    source: src,
-    reindex: !!params.reindex,
-    status: 'queued',
-    progress: 'queued',
-    queuedAt: Date.now(),
-  };
-  jobsById.set(job.id, job);
-  jobQueue.push(job);
-  await persistQueue();
+  const job = enqueueJob({ label, name, source: src, reindex: !!params.reindex });
   refreshQueueUi();
   void pumpQueue();
   return job;
@@ -513,8 +407,8 @@ async function enqueueIndexJob(params: any): Promise<IndexJob | null> {
 export default function (pi: ExtensionAPI) {
   pi.on('session_start', async (_event, ctx) => {
     sessionCtx = ctx; // stash for background-job notifications + progress UI
-    await restoreQueue();
-    if (jobQueue.length) void pumpQueue();
+    initQueue();
+    if (hasDueJobs()) void pumpQueue();
   });
 
   // Re-frame pi's default "expert coding assistant" identity: RA³ is an academic research
@@ -835,12 +729,7 @@ export default function (pi: ExtensionAPI) {
     async execute(_id: string, params: any, _signal?: AbortSignal, _onUpdate?: any, ctx?: any) {
       try {
         if (ctx) sessionCtx = ctx;
-        const job = await enqueueIndexJob(params);
-        if (!job) {
-          return toolError(
-            'document_index: another pi session owns the indexing queue (ra3-queue.lock). Queue jobs from that session, or quit it and retry here.',
-          );
-        }
+        const job = enqueueIndexJob(params);
         const result = {
           status: 'queued',
           job_id: job.id,
@@ -932,25 +821,20 @@ export default function (pi: ExtensionAPI) {
       try {
         if (ctx) sessionCtx = ctx;
         const docs = await listDocuments();
-        const queue = [...jobsById.values()]
-          .filter((j) => j.status === 'queued' || j.status === 'processing')
-          .map((j) => ({
-            job_id: j.id,
-            label: j.label,
-            source: j.source,
-            status: j.status,
-            progress: j.progress,
-          }));
-        const recent = [...jobsById.values()]
-          .filter((j) => j.status === 'done' || j.status === 'error')
-          .slice(-5)
-          .map((j) => ({
-            job_id: j.id,
-            label: j.label,
-            status: j.status,
-            chunks: j.chunks,
-            error: j.error,
-          }));
+        const queue = listActiveJobs().map((j) => ({
+          job_id: j.id,
+          label: j.label,
+          source: j.source,
+          status: j.status,
+          progress: j.progress,
+        }));
+        const recent = listRecentJobs(5).map((j) => ({
+          job_id: j.id,
+          label: j.label,
+          status: j.status,
+          chunks: j.chunks,
+          error: j.error,
+        }));
         const payload = { docs, queue, recent };
         const head = [
           `${docs.length} indexed document(s)`,
