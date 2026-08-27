@@ -25,7 +25,7 @@ import {
   type Json,
 } from "./lib/shared.ts";
 import { extractPdf, renderPages, chunkSections } from "./lib/chunk.ts";
-import { embedTexts, ingestChunks, searchDocuments, listDocuments, exportKb, importKb, docDir, getPageText } from "./lib/kb-sqlite.ts";
+import { embedTexts, ingestChunks, searchDocuments, listDocuments, exportKb, importKb, docDir, getPageText, EMBED_BASE_URL } from "./lib/kb-sqlite.ts";
 import { ocrBaseUrl, ocrMode, isScannedPdf, ocrPdf } from "./lib/ocr.ts";
 
 // Render a tool call's input arguments in the TUI. Without a renderCall, pi
@@ -97,18 +97,46 @@ async function indexDoc(params: any, progress: (msg: string) => void): Promise<a
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, "paper.pdf"), buf);
 
-  progress("Extracting text + chunking...");
-  let { sections, pageCount } = await extractPdf(new Uint8Array(buf));
   const ocrUrl = ocrBaseUrl();
   const mode = ocrMode();
-  const wantOcr = mode === "always" || (mode === "auto" && isScannedPdf(sections, pageCount));
-  if (ocrUrl && wantOcr) {
-    progress(mode === "always" ? "OCR enabled (OCR_MODE=always): routing to OCR server..." : "Low text density: routing to OCR server...");
+  // Checkpoint: OCR is the slow stage (minutes). If the tunnel drops after OCR
+  // but before embed/ingest, the queue retries the job — and the cached OCR
+  // result makes the retry resume at embedding instead of re-OCRing.
+  const cpFile = path.join(dir, "ocr-sections.json");
+  if (params.reindex && existsSync(cpFile)) {
+    try { await fs.rm(cpFile); } catch { /* best effort */ }
+  }
+
+  let sections: { heading: string; page: number; text: string }[] | null = null;
+  let pageCount = 0;
+  if (existsSync(cpFile)) {
     try {
-      ({ sections, pageCount } = await ocrPdf(buf, ocrUrl, progress));
-      progress(`OCR complete: ${pageCount} pages, ${sections.reduce((a, s) => a + s.text.length, 0)} chars`);
-    } catch (e) {
-      progress(`OCR failed (${(e as Error).message}): falling back to pdfjs extraction`);
+      const cp = JSON.parse(await fs.readFile(cpFile, "utf8"));
+      sections = cp.sections as { heading: string; page: number; text: string }[];
+      pageCount = Number(cp.pageCount) || 0;
+      progress(`Using cached OCR result (${pageCount} pages, ${sections.length} sections)`);
+    } catch { /* corrupted checkpoint: redo extraction below */ }
+  }
+
+  if (!sections) {
+    progress("Extracting text + chunking...");
+    ({ sections, pageCount } = await extractPdf(new Uint8Array(buf)));
+    const wantOcr = mode === "always" || (mode === "auto" && isScannedPdf(sections, pageCount));
+    if (ocrUrl && wantOcr) {
+      progress(mode === "always" ? "OCR enabled (OCR_MODE=always): routing to OCR server..." : "Low text density: routing to OCR server...");
+      try {
+        ({ sections, pageCount } = await ocrPdf(buf, ocrUrl, progress));
+        progress(`OCR complete: ${pageCount} pages, ${sections.reduce((a, s) => a + s.text.length, 0)} chars`);
+        try { await fs.writeFile(cpFile, JSON.stringify({ pageCount, sections })); } catch { /* best effort */ }
+      } catch (e) {
+        if (mode === "always") {
+          // OCR_MODE=always promises exact OCR; a silent pdfjs fallback would index
+          // mangled math. Surface the failure — the queue retries when the server
+          // is reachable again (no pdfjs fallback, no silent garbage).
+          throw new Error(`OCR required (OCR_MODE=always) but the OCR server failed: ${(e as Error).message}`);
+        }
+        progress(`OCR failed (${(e as Error).message}): falling back to pdfjs extraction`);
+      }
     }
   }
   const chunks = chunkSections(sections, 2000);
@@ -118,6 +146,9 @@ async function indexDoc(params: any, progress: (msg: string) => void): Promise<a
 
   progress(`Ingesting ${chunks.length} chunks...`);
   const n = ingestChunks({ slug, source: src, pages: pageCount, chunks, dense, sparse });
+
+  // Success: drop the OCR checkpoint (a later re-index should produce fresh OCR).
+  try { await fs.rm(cpFile); } catch { /* best effort */ }
 
   return { slug, source: src, status: "indexed", chunks: n, dir };
 }
@@ -139,6 +170,47 @@ interface IndexJob {
   chunks?: number;
   error?: string;
   queuedAt: number;
+  attempts?: number;      // retry counter for storm-killed (network) failures
+  nextAttemptAt?: number; // epoch ms; the pump skips jobs not yet due
+}
+
+// ---- storm resilience -----------------------------------------------------
+// The embed/OCR servers live on a remote GPU box reached over an SSH tunnel that
+// rides a campus VPN with "flap storms": sessions drop for 1-5 min, then recover.
+// The queue must therefore (1) not even start a job while the servers are
+// unreachable, and (2) treat mid-job network failures as retryable instead of
+// terminal, so indexing completes as soon as connectivity returns.
+
+const MAX_ATTEMPTS = 50; // 30s·2^n capped at 10 min ≈ survives a very long storm
+const RETRY_RE =
+  /fetch failed|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE|AbortError|timed out|timeout|unreachable|Could not fetch|HTTP 5\d\d|OCR request failed|embed HTTP|no markdown content/i;
+
+function isRetryableError(msg: string): boolean {
+  return RETRY_RE.test(msg);
+}
+
+function backoffMs(attempt: number): number {
+  return Math.min(30_000 * 2 ** (attempt - 1), 600_000);
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+// Quick health probe of the servers the pipeline needs. The embed server is
+// always required; the OCR server is gated only when OCR_MODE=always (the mode
+// that promises exact OCR and cannot silently fall back to pdfjs).
+async function serversUp(): Promise<{ embed: boolean; ocr: boolean }> {
+  const check = async (url: string): Promise<boolean> => {
+    try {
+      const r = await fetch(`${url}/health`, { signal: AbortSignal.timeout(4000) });
+      return r.ok;
+    } catch {
+      return false;
+    }
+  };
+  const embed = await check(EMBED_BASE_URL);
+  const ocrUrl = ocrBaseUrl();
+  const ocr = ocrMode() === "always" && ocrUrl ? await check(ocrUrl) : true;
+  return { embed, ocr };
 }
 
 const jobQueue: IndexJob[] = [];
@@ -177,6 +249,12 @@ function restoreQueue(): void {
         // interrupted by a previous shutdown: retry it
         j.status = "queued";
         j.progress = "queued (resumed after restart)";
+        j.nextAttemptAt = 0;
+      } else if (j.status === "error" && isRetryableError(j.error ?? "") && (j.attempts ?? 0) < MAX_ATTEMPTS) {
+        // died in a VPN/tunnel storm: resurrect it so results arrive when connectivity returns
+        j.status = "queued";
+        j.progress = `re-queued after server drop (attempt ${j.attempts ?? 0})`;
+        j.nextAttemptAt = 0;
       }
       jobsById.set(j.id, j);
       if (j.id >= nextJobId) nextJobId = j.id + 1;
@@ -212,7 +290,29 @@ async function pumpQueue(): Promise<void> {
   pumping = true;
   try {
     while (jobQueue.length) {
-      const job = jobQueue.shift()!;
+      const now = Date.now();
+      const idx = jobQueue.findIndex((j) => (j.nextAttemptAt ?? 0) <= now);
+      if (idx === -1) {
+        // everything waiting on backoff: sleep until the earliest is due
+        await sleep(5_000);
+        continue;
+      }
+      const job = jobQueue.splice(idx, 1)[0];
+      if (!job.nextAttemptAt) job.nextAttemptAt = now;
+
+      // Health gate: never start a job while the servers are unreachable. The
+      // job simply waits (status stays queued) and runs when the storm clears.
+      const up = await serversUp();
+      if (!up.embed || !up.ocr) {
+        job.status = "queued";
+        job.progress = `waiting for ${!up.embed ? "embed" : "OCR"} server (tunnel/VPN down?) — will start automatically`;
+        job.nextAttemptAt = now + 20_000;
+        jobQueue.push(job);
+        refreshQueueUi();
+        await sleep(20_000);
+        continue;
+      }
+
       job.status = "processing";
       persistQueue();
       refreshQueueUi();
@@ -226,10 +326,24 @@ async function pumpQueue(): Promise<void> {
         persistQueue();
         notify(`${job.label}: indexed ${result.chunks} chunks: searchable now`, "info");
       } catch (e) {
-        job.status = "error";
-        job.error = (e as Error).message;
-        persistQueue();
-        notify(`${job.label}: indexing failed: ${(e as Error).message}`, "error");
+        const msg = (e as Error).message;
+        if (isRetryableError(msg) && (job.attempts ?? 0) < MAX_ATTEMPTS) {
+          // Server died mid-job (tunnel drop): back off and retry, don't fail.
+          // The OCR checkpoint (docs/<slug>/ocr-sections.json) makes the retry
+          // resume after OCR instead of re-running it.
+          job.attempts = (job.attempts ?? 0) + 1;
+          job.status = "queued";
+          job.progress = `server dropped mid-job (${msg}) — retrying in ${Math.round(backoffMs(job.attempts) / 1000)}s (attempt ${job.attempts})`;
+          job.nextAttemptAt = Date.now() + backoffMs(job.attempts);
+          jobQueue.push(job);
+          persistQueue();
+          notify(`${job.label}: server unreachable mid-job (${msg}) — will retry automatically`, "warning");
+        } else {
+          job.status = "error";
+          job.error = msg;
+          persistQueue();
+          notify(`${job.label}: indexing failed: ${msg}`, "error");
+        }
       }
       refreshQueueUi();
     }
