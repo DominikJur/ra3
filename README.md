@@ -11,13 +11,22 @@ plausible-sounding prose.
 
 - **Cited, verifiable answers.** Every claim is backed by a retrieved passage and cited as
   `(source, page)`, so you can flip to the page and check it.
-- **Your literature stays private.** Documents never leave your machine. No cloud accounts, no
-  corpus uploads.
+- **Exact math.** `OCR_MODE=always` (default) routes every PDF through Marker 2 / Surya 2, so
+  equations are indexed as real LaTeX (`$$\mathbf{H}[\phi] = \begin{bmatrix}…\end{bmatrix}$$`), not
+  mangled glyphs.
+- **Your KB stays local.** One SQLite file on your machine; the only data that leaves it is what
+  you choose to send to your own OCR/embedding servers (see `server/`).
 - **A complete research loop.** Discover papers (Semantic Scholar, citation traversal, open-access
   PDF resolution), read them (text extraction; OCR for scanned PDFs), index them, and query the result.
 - **An evolving knowledge base.** Everything you index: including the papers a deep-research run
   reads: accumulates permanently in one SQLite file, so your library compounds with each session
   and stays searchable later.
+- **Survives outages and multiple sessions.** The indexing queue is SQLite-backed and
+  transactional: any number of pi sessions can queue jobs, each runs exactly once, and VPN/tunnel
+  storms make jobs *wait* (or retry with backoff) instead of failing.
+- **Fire-and-forget batch indexing.** `document_submit` uploads a pile of PDFs to your OCR server
+  as one async job; the server runs OCR + chunking + embedding and builds KB entries while your
+  PC is off — `document_pull` merges them when you're back.
 - **Retrieval you can rely on.** Zero-shot SciFact nDCG@10 of 0.70: on par with SPLADE, ahead of
   ColBERT and Contriever, so the passages it cites are the right ones.
 - **Bring your own model.** RA³ does retrieval; pair it with whichever LLM you run (local or
@@ -27,20 +36,25 @@ plausible-sounding prose.
 
 Retrieval fuses three complementary signals: BGE-M3 dense embeddings, BM25 keyword match, and
 BGE-M3 learned-sparse weights: via reciprocal-rank fusion and a diversity reranking pass, stored
-in one SQLite file (`sqlite-vec`). Documents are chunked locally; `OCR_MODE=always` (default)
-routes every PDF through a pluggable OCR server (Marker 2 / Surya 2 for exact LaTeX math,
-Tesseract for plain text). The only out-of-process
-compute is an embedding server you run yourself: CPU or GPU, or rented: see `server/`.
+in one SQLite file (`sqlite-vec`). Indexing runs on a **storm-proof, multi-process queue**
+(SQLite + transactional claims: any pi session can enqueue, each job runs exactly once; a health
+gate waits out outages, failures retry with backoff, and an OCR checkpoint makes retries cheap).
+OCR (`OCR_MODE=always` by default) goes through a pluggable server — Marker 2 / Surya 2 for exact
+LaTeX math, Tesseract for plain text — via **async jobs** (`POST /jobs` + polling, so a flaky
+tunnel can't kill a long OCR run). The same server can run the whole pipeline remotely
+(OCR → chunk → embed → KB bundles) for fire-and-forget batch indexing (`document_submit` /
+`document_pull`). The only out-of-process compute is an embedding server you run yourself: CPU or
+GPU, or rented: see `server/`.
 
 ## A small addition to pi
 
 RA³ is not a fork or rewrite of pi: it's a focused set of **open-source contributions on top of
-pi**, in the spirit of pi's minimal design. It adds **9 tools, 2 skills, and one policy file**,
-measured at **≈2.1k tokens** (down from ≈3.4k before tightening):
+pi**, in the spirit of pi's minimal design. It adds **12 tools, 2 skills, and one policy file**,
+measured at **≈3.2k tokens** of system-prompt delta:
 
 [![system prompt footprint](docs/system-prompt-footprint.svg)](docs/system-prompt-footprint.html)
 
-- **Measured** (`scripts/prompt-footprint.mjs`): 9 tools ≈0.8k + 2 skills + policy ≈1.3k = **≈2.1k tokens**.
+- **Measured** (`scripts/prompt-footprint.mjs`): 12 tools ≈1.2k + 2 skills + policy ≈2.0k = **≈3.2k tokens**.
 - **Deliberately absent**: no sub-agent swarm, no vendored LLM stack, no instruction wall.
 
 ### Token counts: sources (full prompt = prompt text + tool definitions)
@@ -48,7 +62,7 @@ measured at **≈2.1k tokens** (down from ≈3.4k before tightening):
 | agent | approx. tokens | source |
 |---|---|---|
 | pi (full) | ~2.5k | base + built-in tools (est.): `@earendil-works/pi-coding-agent` dist |
-| pi + RA³ (full) | ~4.6k | measured: pi full + RA³ delta ~2.1k (`scripts/prompt-footprint.mjs`) |
+| pi + RA³ (full) | ~5.7k | measured: pi full + RA³ delta ~3.2k (`scripts/prompt-footprint.mjs`) |
 | Cursor | ~10.2k | [WeighMyPrompt](https://weighmyprompt.com/system-prompts/cursor) |
 | Codex | ~13k | [openai/codex issue](https://github.com/openai/codex/issues/19212) |
 | Claude Code | ~18k | ~2.5k prompt + 14–17k tools: [claudecodecamp](https://www.claudecodecamp.com/p/inside-claude-code-s-system-prompt) |
@@ -146,7 +160,7 @@ export EMBED_BASE_URL=http://localhost:8001
 ## Quickstart
 
 ```
-document_index({ source: "path/to/book.pdf" })     # index a PDF (local/URL/DOI): queues in the background
+document_index({ source: "path/to/book.pdf" })      # index a PDF (local/URL/DOI): queues in the background
 document_search({ query: "bias variance tradeoff" }) # hybrid search, cites (source, page)
 document_page({ doc: "slug", page: 307 })            # full page text (exact equations)
 document_status()                                    # indexed docs + background queue progress
@@ -154,11 +168,23 @@ document_status()                                    # indexed docs + background
 
 `document_index` is **asynchronous**: it queues the job and returns immediately, so you can index
 several documents at once and keep working: indexing (and OCR) run in the background and a
-notification fires when each job finishes.
+notification fires when each job finishes. The queue is shared across pi sessions (SQLite,
+exactly-once claims) and resilient to outages: when the embed/OCR servers are unreachable, jobs
+*wait* instead of failing.
 
-Scanned/image PDFs are auto-routed to an optional OCR backend (only when pdfjs text density is
-below ~40 chars/page; text PDFs are extracted fully locally by `lib/ocr.ts`). Two interchangeable
-servers ship in `server/`: point `OCR_BASE_URL` at whichever you run:
+**Fire-and-forget batch indexing (close the PC):**
+
+```
+document_submit({ sources: ["a.pdf", "b.pdf", "book.pdf"] })  # one async server job; server runs OCR+chunk+embed
+# ... server keeps working while your machine is off ...
+document_pull()                                                # merge finished KB entries (download + import)
+```
+
+CLI equivalent: `node server-jobs.mjs <submit|status|pull>`.
+
+OCR: `OCR_MODE=always` (default) routes every PDF through the OCR server at `OCR_BASE_URL`; set
+`OCR_MODE=auto` (scanned only) or `off` to change. Two interchangeable servers ship in
+`server/`; point `OCR_BASE_URL` at whichever you run:
 
 ```bash
 # light (recommended without a GPU): Tesseract: plain text only, no math/table fidelity
@@ -243,9 +269,11 @@ and its grounded answer live in `demo/README.md` and `demo/answer.md`.
 ## Layout
 
 - `extensions/deep-research/`: the tools (`document_index/search/page/status/export_kb/import_kb`,
-  `academic_graph_search`, `academic_citations`, `unpaywall_resolver`, `pdf_extract`).
-  `lib/kb-sqlite.ts` is the KB engine.
+  `document_submit/pull`, `academic_graph_search`, `academic_citations`, `unpaywall_resolver`,
+  `pdf_extract`). `lib/kb-sqlite.ts` is the KB engine, `lib/queue.ts` the multi-process SQLite
+  queue, `lib/remote-jobs.ts` the submit/pull client.
 - `export-kb.mjs` / `import-kb.mjs`: standalone CLI wrappers for KB snapshot/merge.
+- `server-jobs.mjs`: remote batch CLI (`submit` / `status` / `pull`).
 - `kb-state.mjs`: KB viewer — `node kb-state.mjs` lists every document with its real title,
   embedding model, OCR method and sizes; `node kb-state.mjs <index|slug>` shows full metadata
   (source, chunk spread, sections, provenance).
