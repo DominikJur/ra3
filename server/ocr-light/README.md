@@ -1,12 +1,12 @@
 # OCR server: Tesseract (light, text-only)
 
 A small, CPU-only OCR server for **scanned/image PDFs**, intended for users without a GPU who
-only need the *text* of a scan. It is a drop-in for the heavy MinerU server: same
+only need the *text* of a scan. It is a drop-in for the heavy GPU OCR server (Marker 2 / Surya 2): same
 `POST /file_parse` contract, so `lib/ocr.ts` works against either: just set `OCR_BASE_URL` to
 whichever you run.
 
 > **Choose this when**: no GPU, and you care about the words but not the math/layout.
-> **Choose `../ocr/` (MinerU) when**, you need math, formulas, tables, and reading order.
+> **Choose `../ocr/` (Marker 2) when** you need math, formulas, tables, and reading order.
 
 ## Vulnerabilities (documented on purpose)
 
@@ -24,7 +24,7 @@ What it handles well: **plain printed text on clean scans** (books, articles, le
 
 Because the extracted text is then *embedded and searched*, a math-heavy paper OCR'd by this
 server will index its prose fine but lose its equations: those won't be retrievable, and any
-question depending on a formula will miss. If math matters, use MinerU (`../ocr/`).
+question depending on a formula will miss. If math matters, use Marker 2 (`../ocr/`).
 
 ## Run
 
@@ -62,6 +62,6 @@ export OCR_BASE_URL=http://localhost:8002
 | endpoint | request | response |
 |---|---|---|
 | `GET /health` |: | `{"ok": true, "ocr": "tesseract", "lang": "eng"}` |
-| `POST /file_parse` | multipart: `files` (PDF) + MinerU-style form fields (ignored) | `{"results": {"<stem>": {"md_content": "…"}}}` |
+| `POST /file_parse` | multipart: `files` (PDF) + legacy form fields (ignored) | `{"results": {"<stem>": {"md_content": "…"}}}` |
 
 Output is markdown with `<!-- page N -->` markers, which `lib/ocr.ts` already knows how to split.

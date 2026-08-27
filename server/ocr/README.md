@@ -1,67 +1,71 @@
-# OCR server: MinerU (heavy, math-capable)
+# OCR server: Marker 2 / Surya 2 (GPU, exact math)
 
-Reference server for **scanned/image PDFs** only. Text-based PDFs never reach OCR: they're
-extracted locally by pdfjs. `lib/ocr.ts` routes to `OCR_BASE_URL` only when a PDF's text density
-is below ~40 chars/page.
+The recommended OCR backend. Runs `marker_single --force_ocr` (Surya 2, a 650M VLM) so **every
+page** is OCR'd with exact LaTeX math — no dependence on the PDF's text layer, no mangled
+`λᵏe⁻λ/k!`-style garbage. Reconstructs **per-page markdown** from Marker's JSON block tree and
+emits `<!-- page N -->` markers, so KB page numbers stay correct.
 
-This is the **heavy** option: MinerU 3.x with the `pipeline` backend (PDF-Extract-Kit-1.0).
-It is the best choice when you need **math, formulas, tables, and layout** preserved. If you only
-need the text and have no GPU, use `../ocr-light/` instead.
+- Beats the old MinerU pipeline on accuracy (olmOCR-bench 76.0 vs 72.7) and is ~5–10× faster
+  on a 16 GB GPU (~2–5 pages/s).
+- License: Marker code Apache-2.0; **Surya model weights OpenRAIL-M** (free for research /
+  personal / startups < $5M revenue; commercial above needs a datalab.to license).
 
-## What it's good / bad at
+## Contract
 
-| | |
-|---|---|
-| ✅ plain printed text | excellent |
-| ✅ math / formulas | yes (LaTeX-ish output) |
-| ✅ tables | structured |
-| ✅ multi-column reading order | yes |
-| ⚠️ handwriting | partial |
-| ❌ install size | huge: torch + ~8 GB models |
-| ❌ CPU | slow (order of magnitude worse than GPU) |
-
-## Run (Docker, GPU)
-
-```bash
-docker build -t ra3-ocr .
-docker run --gpus all -p 8002:8002 \
-  -v mineru-models:/models \
-  -v mineru-hf-cache:/root/.cache/huggingface \
-  ra3-ocr
+```text
+GET  /health     -> {"ok": true, "ocr": "marker/surya-2"}
+POST /file_parse multipart: files (PDF) -> {"results": {"<stem>": {"md_content": "..."}}}
 ```
 
-Then point the package at it:
+`md_content` is markdown with `<!-- page N -->` markers separating pages. `lib/ocr.ts` splits on
+those markers, so no client changes are needed for correct page numbers.
+
+## Deployment (user-space, no sudo — e.g. a GPU box with `uv`)
 
 ```bash
-export OCR_BASE_URL=http://localhost:8002        # or http://<host>:8002 (cloud) / a tunnel
+uv venv ~/marker-venv --python 3.12
+source ~/marker-venv/bin/activate
+uv pip install marker-pdf fastapi uvicorn python-multipart
+uv pip install ninja                       # flashinfer JIT needs it (pip wheel, no apt)
 ```
 
-### Model download (one-time, ~8 GB)
+**Inference backend (Surya):** an OpenAI-compatible `/v1/chat/completions` server. On NVIDIA,
+run vLLM natively (no docker needed — set `SURYA_INFERENCE_URL` so surya attaches instead of
+docker-spawning):
 
-MinerU fetches PDF-Extract-Kit-1.0 from Hugging Face on first use. With the `-v` volumes above,
-the models and the HF cache persist across restarts. The `mineru.json` in this dir points
-`models-dir.pipeline` at `/models/PDF-Extract-Kit-1.0`: after the first run, check where MinerU
-actually placed the snapshot (a hash-suffixed path under the HF cache) and set `models-dir.pipeline`
-to that, or leave it to MinerU's default resolution. The exact download/CLI behavior is
-version-specific; this was written against **MinerU 3.4.5**.
+```bash
+uv venv ~/vllm-venv --python 3.12 && source ~/vllm-venv/bin/activate && uv pip install vllm
+export CUDA_HOME=/opt/cuda PATH=$HOME/vllm-venv/bin:$PATH   # adjust; nvcc must be findable
+vllm serve datalab-to/surya-ocr-2 \
+  --dtype bfloat16 --max-model-len 18000 --gpu-memory-utilization 0.7 \
+  --enable-prefix-caching \
+  --mm-processor-kwargs '{"min_pixels": 3136, "max_pixels": 6291456}' \
+  --served-model-name datalab-to/surya-ocr-2 --port 8000
+```
 
-## Vulnerabilities / gotchas
+Notes from a real deployment (RTX 5060 Ti 16 GB, Arch, GCC 16):
+- `--gpu-memory-utilization` must fit the free VRAM; 0.7 was needed with ~2.5 GB used by other
+  processes (vLLM refuses to start if free memory < util × total).
+- flashinfer JIT-compiles kernels on first run and needs `ninja` (pip wheel) + `nvcc` on PATH.
+  With GCC 16 the build can fail (`__self` errors) — use GCC 15 if installed (`PATH`-prepend a
+  dir with `gcc -> gcc-15`, `g++ -> g++-15` symlinks).
+- First run downloads the Surya 2 weights into `~/.cache/huggingface` (~1–2 GB).
 
-- **Version-sensitive config.** The `mineru.json` schema and `mineru-api` flags can change between
-  MinerU releases. Treat this dir as a starting point, not gospel.
-- **Backend must be `pipeline`.** The default `hybrid-engine` backend needs a local VLM that's too
-  heavy for smaller cards; the client always sends `backend=pipeline`, matching this config.
-- **No auth.** The API has none: keep it on `127.0.0.1` + tunnel, or expose `0.0.0.0` only behind
-  a firewall.
-- **GPU strongly recommended.** CPU OCR here is ~an order of magnitude slower (the reference
-  deployment measured ~11 s/page on an RTX 5060 Ti 16 GB).
+Then run the server (port 8002 = `OCR_BASE_URL` default):
 
-## Contract (same as `../ocr-light/`)
+```bash
+scp ocr-marker.py server:~/   # or wherever the server lives
+SURYA_INFERENCE_URL=http://127.0.0.1:8000/v1 \
+setsid nohup ~/marker-venv/bin/python ~/ocr-marker.py > ~/marker-ocr.log 2>&1 &
+curl -s http://127.0.0.1:8002/health   # {"ok":true,"ocr":"marker/surya-2"}
+```
 
-| endpoint | request | response |
-|---|---|---|
-| `GET /health` |: | `{"ok": true}` |
-| `POST /file_parse` | multipart: `files` (PDF) + `backend=pipeline`, `parse_method=ocr`, `return_md=true`, … | `{"results": {"<stem>": {"md_content": "…"}}}` |
+Env knobs: `OCR_TIMEOUT` (per-file seconds, default 7200), `MARKER_MODE` (balanced/fast),
+`SURYA_INFERENCE_URL`, `SURYA_INFERENCE_BACKEND` (vllm default; `llamacpp` also works if you
+point it at an OpenAI-compatible server), `OCR_HOST` (default 127.0.0.1).
 
-Both OCR servers implement this contract, so `lib/ocr.ts` is agnostic: choose by setting
-`OCR_BASE_URL`.
+## CPU / no-GPU fallback
+
+Marker can run in `--mode fast` with a llama.cpp backend (`SURYA_INFERENCE_BACKEND=llamacpp` +
+a CUDA/CPU `llama-server` binary), but for CPU-only boxes the `server/ocr-light/` Tesseract
+server is the pragmatic choice (plain text, no math).

@@ -27,8 +27,9 @@ plausible-sounding prose.
 
 Retrieval fuses three complementary signals: BGE-M3 dense embeddings, BM25 keyword match, and
 BGE-M3 learned-sparse weights: via reciprocal-rank fusion and a diversity reranking pass, stored
-in one SQLite file (`sqlite-vec`). Documents are chunked locally; scanned PDFs are OCR'd by a
-pluggable server (MinerU for math/layout, Tesseract for plain text). The only out-of-process
+in one SQLite file (`sqlite-vec`). Documents are chunked locally; `OCR_MODE=always` (default)
+routes every PDF through a pluggable OCR server (Marker 2 / Surya 2 for exact LaTeX math,
+Tesseract for plain text). The only out-of-process
 compute is an embedding server you run yourself: CPU or GPU, or rented: see `server/`.
 
 ## A small addition to pi
@@ -164,14 +165,14 @@ servers ship in `server/`: point `OCR_BASE_URL` at whichever you run:
 #   docker build -t ra3-ocr-light server/ocr-light && docker run -p 8002:8002 ra3-ocr-light
 export OCR_BASE_URL=http://localhost:8002
 
-# heavy (GPU): MinerU: math, tables, and layout preserved
-#   see server/ocr/README.md
+# recommended (GPU): Marker 2 / Surya 2: exact LaTeX math on every page (--force_ocr)
+#   see server/ocr/README.md (vLLM inference backend, no docker needed)
 export OCR_BASE_URL=http://localhost:8002
 ```
 
 See `server/README.md` for the full comparison and the documented weaknesses of each.
 (**Vulnerability TL;DR:** the light server OCRs plain text well but mangles math, tables, and
-multi-column reading order: equations become garbage. Use MinerU if those matter.)
+multi-column reading order: equations become garbage. Use Marker 2 if those matter.)
 
 ## Import / export the knowledge base
 
@@ -206,7 +207,7 @@ Notes:
 | var | default | meaning |
 |---|---|---|
 | `EMBED_BASE_URL` | `http://localhost:8001` | BGE-M3 dense+sparse embed server |
-| `OCR_BASE_URL` | `http://localhost:8002` | OCR server (recommended: Marker 2 `server/ocr-marker/`; also MinerU `server/ocr/`, Tesseract `server/ocr-light/`) |
+| `OCR_BASE_URL` | `http://localhost:8002` | OCR server (recommended: Marker 2 `server/ocr/`; light: Tesseract `server/ocr-light/`) |
 | `OCR_MODE` | `always` | when OCR runs: `always` (every doc, exact math) · `auto` (scanned only) · `off` |
 | `KB_ROOT` | `~/pi_research/books` | where `kb.sqlite` + per-doc dirs live |
 | `S2_API_KEY` |: | Semantic Scholar API key (avoids rate limits) |
@@ -245,7 +246,7 @@ and its grounded answer live in `demo/README.md` and `demo/answer.md`.
   `academic_graph_search`, `academic_citations`, `unpaywall_resolver`, `pdf_extract`).
   `lib/kb-sqlite.ts` is the KB engine.
 - `export-kb.mjs` / `import-kb.mjs`: standalone CLI wrappers for KB snapshot/merge.
-- `server/`: reference compute servers: `embed/` (FlagEmbedding BGE-M3), `ocr/` (MinerU),
+- `server/`: reference compute servers: `embed/` (FlagEmbedding BGE-M3), `ocr/` (Marker 2 / Surya 2),
   `ocr-light/` (Tesseract). See `server/README.md`.
 - `skills/book/` + `skills/deep-research/`: the workflow instructions.
 - `scifact_eval/`: retrieval-only benchmark harness.
@@ -274,10 +275,9 @@ Everything this package builds on is cited here.
 
 **OCR**
 
-- **MinerU**: Bin Wang, Chao Xu, Xiaomeng Zhao, Linke Ouyang, Fan Wu, et al. (2024),
-  *“MinerU: An Open-Source Solution for Precise Document Content Extraction.”* arXiv:2409.18839.
-  © Shanghai AI Laboratory. License: **AGPL-3.0** (recent releases have changed it: check the
-  upstream `LICENSE`; the copyleft terms matter if you redistribute a bundled server).
+- **Marker 2 / Surya 2**: Datalab (2025), *“Marker 2”* / *“Surya 2”* — the OCR server in
+  `server/ocr/`. Code Apache-2.0; **model weights OpenRAIL-M** (free for research / personal /
+  startups < $5M revenue; commercial above needs a paid datalab.to license).
 - **Tesseract**: Ray Smith (2007), *“An Overview of the Tesseract OCR Engine,”* Proc. 9th
   Int. Conf. on Document Analysis and Recognition (ICDAR), pp. 629–633. Apache-2.0.
 

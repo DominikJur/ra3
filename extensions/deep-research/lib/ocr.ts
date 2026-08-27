@@ -1,14 +1,14 @@
 // Optional OCR backend for scanned/image PDFs.
 //
 // pdfjs (lib/chunk.ts) extracts text natively for text-based PDFs but yields
-// almost nothing for scanned pages. When the extracted text density is too
-// low, document_index can fall back to a self-hosted OCR server reached via
-// OCR_BASE_URL (default http://localhost:8002). Two interchangeable servers
-// ship in server/: MinerU (`server/ocr/`, heavy: math/tables/layout) and
-// Tesseract (`server/ocr-light/`, light: plain text only). Both implement
-// POST /file_parse -> {results: {<stem>: {md_content}}}; we split the returned
-// markdown into per-page sections so the regular chunking/embedding/ingest
-// path is reused.
+// almost nothing for scanned pages. When OCR_MODE says so (default: always),
+// document_index routes the PDF to a self-hosted OCR server reached via
+// OCR_BASE_URL (default http://localhost:8002). Servers ship in server/:
+// Marker 2 / Surya 2 (`server/ocr/`, GPU: exact LaTeX math on every page via
+// --force_ocr) and Tesseract (`server/ocr-light/`, CPU: plain text only). Both
+// implement POST /file_parse -> {results: {<stem>: {md_content}}}; the server
+// is responsible for emitting <!-- page N --> markers so the per-page split
+// below assigns correct KB page numbers.
 //
 // OCR_BASE_URL is optional: unset or unreachable → document_index simply
 // indexes whatever pdfjs extracted (scanned PDFs will be near-empty).
@@ -64,8 +64,9 @@ function splitPages(md: string): string[] {
   return pages.map((p) => p.trim()).filter(Boolean);
 }
 
-// MinerU markdown → per-page sections. If the markdown has no page markers we
-// fall back to markdown headings as section boundaries, else a single section.
+// Marker/Surya block tree → per-page sections. The server emits <!-- page N -->
+// markers (splitPages below); if the markdown has no page markers we fall back
+// to markdown headings as section boundaries, else a single section.
 export function markdownToSections(md: string): OcrSection[] {
   const pages = splitPages(md);
   if (pages.length > 1) {
@@ -98,14 +99,11 @@ export async function ocrPdf(
   baseUrl: string,
   progress?: (msg: string) => void,
 ): Promise<{ sections: OcrSection[]; pageCount: number }> {
-  progress?.("Submitting to MinerU OCR (this can take a while)...");
+  progress?.("Submitting to OCR server (Marker 2/Surya; this can take a while)...");
   const fd = new FormData();
   fd.append("files", new Blob([buf as unknown as BlobPart], { type: "application/pdf" }), "paper.pdf");
-  fd.append("backend", "pipeline");
-  fd.append("parse_method", "ocr");
-  fd.append("return_md", "true");
-  fd.append("formula_enable", "true");
-  fd.append("table_enable", "true");
+  // Marker 2 (server/ocr/) and Tesseract (server/ocr-light/) both use only the
+  // files field; MinerU-specific fields (backend/parse_method/...) are gone.
   const resp = await fetch(`${baseUrl}/file_parse`, {
     method: "POST",
     body: fd,
