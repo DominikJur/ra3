@@ -4,7 +4,7 @@
 #
 # Metric: FULL system prompt = prompt text + tool definitions, approximate tokens.
 #   pi (full)          ~2.5k  base + built-in tools (estimated)
-#   pi + RA³ (full)    ~4.6k  measured (pi full + RA³ delta ~2.1k, scripts/prompt-footprint.mjs)
+#   pi + RA³ (full)    ~5.7k  measured (pi full + RA³ delta ~3.2k, scripts/prompt-footprint.mjs)
 #   Cursor             ~10.2k  https://weighmyprompt.com/system-prompts/cursor
 #   Codex              ~13k    https://github.com/openai/codex/issues/19212
 #   Claude Code        ~18k    ~2.5k prompt + 14-17k tools: https://www.claudecodecamp.com/p/inside-claude-code-s-system-prompt
@@ -17,7 +17,7 @@ LIGHT_RED = "#ef9a9a"
 
 entries = [
     ("pi (full)",              2500,  "≈ base + built-in tools (est.)",                    LIGHT_BLUE),
-    ("pi + RA³ (full)",        4600,  "measured (+~2.1k RA³ tools/skills/policy)",          LIGHT_BLUE),
+    ("pi + RA³ (full)",        5700,  "measured (+~3.2k RA³ tools/skills/policy)",          LIGHT_BLUE),
     ("Cursor (full)",         10200,  "~10.2k (WeighMyPrompt)",                             LIGHT_RED),
     ("Codex (full)",          13000,  "~13k (openai/codex issue)",                          LIGHT_RED),
     ("Claude Code (full)",    18000,  "~2.5k prompt + 14-17k tools (claudecodecamp)",       LIGHT_RED),
