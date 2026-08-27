@@ -22,8 +22,7 @@ Run a literature-backed research pipeline end-to-end; write the final report to 
 - `academic_citations` both directions (`citations` = who cites it; `references` = what it cites).
 
 ## 4. Deep-read (papers that matter)
-- `pdf_extract({ mode: "text" })` to skim; `mode: "render"` → page PNGs → `read` them for figures,
-  tables, equations (preserves two-column layout).
+- `pdf_extract({ mode: "text" })` to skim the full text. For an indexed paper, `document_page({ doc, page })` returns a page's full text for exact equations. (Text-only: don't try to read rendered PNGs.)
 - Prefer DOI/arXiv id over raw URL. Don't queue the same paper twice.
 
 ## 5. Synthesize

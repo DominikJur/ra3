@@ -14,7 +14,7 @@ plausible-sounding prose.
 - **Your literature stays private.** Documents never leave your machine. No cloud accounts, no
   corpus uploads.
 - **A complete research loop.** Discover papers (Semantic Scholar, citation traversal, open-access
-  PDF resolution), read them (text + page images, OCR for scans), index them, and query the result.
+  PDF resolution), read them (text extraction; OCR for scanned PDFs), index them, and query the result.
 - **An evolving knowledge base.** Everything you index: including the papers a deep-research run
   reads: accumulates permanently in one SQLite file, so your library compounds with each session
   and stays searchable later.
@@ -147,6 +147,7 @@ export EMBED_BASE_URL=http://localhost:8001
 ```
 document_index({ source: "path/to/book.pdf" })     # index a PDF (local/URL/DOI): queues in the background
 document_search({ query: "bias variance tradeoff" }) # hybrid search, cites (source, page)
+document_page({ doc: "slug", page: 307 })            # full page text (exact equations)
 document_status()                                    # indexed docs + background queue progress
 ```
 
@@ -232,7 +233,7 @@ question whose answer lives only in the book; `demo/retrieve.mjs` runs the 3-leg
 
 ## Layout
 
-- `extensions/deep-research/`: the tools (`document_index/search/status/export_kb/import_kb`,
+- `extensions/deep-research/`: the tools (`document_index/search/page/status/export_kb/import_kb`,
   `academic_graph_search`, `academic_citations`, `unpaywall_resolver`, `pdf_extract`).
   `lib/kb-sqlite.ts` is the KB engine.
 - `export-kb.mjs` / `import-kb.mjs`: standalone CLI wrappers for KB snapshot/merge.

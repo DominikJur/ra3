@@ -6,7 +6,8 @@ You have a private knowledge base (the `book` skill) of indexed books and papers
 1. **Know the KB first.** Call `document_status` at the start of a session, or the first time a
    task could touch the KB's domain. Don't dismiss it as irrelevant before checking.
 2. **Search before asserting.** Any domain claim (definitions, theorems, formulas, results,
-   citations) must be grounded in `document_search` chunks, cited as `(source: <slug>, p. N)`.
+   citations) must be grounded in `document_search` chunks, cited as `(source: <slug>, p. N)`. When
+   a snippet is too short to quote exactly, use `document_page({ doc, page })` for the full page text.
 3. **Search when stuck or unsure: on ANY task**, including infra/debugging. If you're retrying
    without progress or about to guess, STOP and search the KB (try a couple of phrasings); if it
    comes up empty, fall back to web sources.
