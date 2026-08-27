@@ -79,20 +79,35 @@ export function getDb(): DatabaseSync {
 // ---- portable indexing (local extract/chunk + EMBED_BASE_URL embedding) ----
 
 // Batch-embed texts via the embedding server, returning dense (1024) + learned-sparse weights.
+// Retry a batch embed a few times: the embed server is reached over an SSH tunnel that can drop
+// a kept-alive connection, and a mid-book failure is expensive (the whole indexing job fails).
+async function embedBatchWithRetry(batch: string[]): Promise<any> {
+  let lastErr: Error | null = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await fetch(`${EMBED_BASE_URL}/embed`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ texts: batch, return_sparse: true }),
+        signal: AbortSignal.timeout(180000),
+      });
+      if (!res.ok) throw new Error(`embed HTTP ${res.status}`);
+      return await res.json();
+    } catch (e) {
+      lastErr = e as Error;
+      if (attempt < 3) await new Promise((r) => setTimeout(r, 500 * attempt));
+    }
+  }
+  throw lastErr ?? new Error("embed batch failed");
+}
+
 export async function embedTexts(texts: string[]): Promise<{ dense: Float32Array[]; sparse: Map<string, number>[] }> {
   const dense: Float32Array[] = [];
   const sparse: Map<string, number>[] = [];
   const B = 32;
   for (let i = 0; i < texts.length; i += B) {
     const batch = texts.slice(i, i + B);
-    const res = await fetch(`${EMBED_BASE_URL}/embed`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ texts: batch, return_sparse: true }),
-      signal: AbortSignal.timeout(180000),
-    });
-    if (!res.ok) throw new Error(`embed HTTP ${res.status}`);
-    const j = await res.json();
+    const j = await embedBatchWithRetry(batch);
     for (let k = 0; k < batch.length; k++) {
       dense.push(new Float32Array(j.dense[k]));
       const m = new Map<string, number>();

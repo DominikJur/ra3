@@ -100,8 +100,8 @@ async function indexDoc(params: any, progress: (msg: string) => void): Promise<a
   progress("Extracting text + chunking...");
   let { sections, pageCount } = await extractPdf(new Uint8Array(buf));
   const ocrUrl = ocrBaseUrl();
-  if (ocrUrl && isScannedPdf(sections, pageCount)) {
-    progress("Low text density: routing to MinerU OCR...");
+  if (ocrUrl && (params.forceOcr || isScannedPdf(sections, pageCount))) {
+    progress(params.forceOcr ? "forceOcr set: routing to MinerU OCR..." : "Low text density: routing to MinerU OCR...");
     try {
       ({ sections, pageCount } = await ocrPdf(buf, ocrUrl, progress));
       progress(`OCR complete: ${pageCount} pages, ${sections.reduce((a, s) => a + s.text.length, 0)} chars`);
@@ -132,6 +132,7 @@ interface IndexJob {
   name?: string;   // explicit slug passed through to indexDoc
   source: string;
   reindex: boolean;
+  forceOcr: boolean;
   status: "queued" | "processing" | "done" | "error";
   progress: string;
   chunks?: number;
@@ -216,7 +217,7 @@ async function pumpQueue(): Promise<void> {
       refreshQueueUi();
       try {
         const result = await indexDoc(
-          { source: job.source, name: job.name, reindex: job.reindex },
+          { source: job.source, name: job.name, reindex: job.reindex, forceOcr: job.forceOcr },
           (msg) => { job.progress = msg; refreshQueueUi(); },
         );
         job.status = "done";
@@ -246,6 +247,7 @@ function enqueueIndexJob(params: any): IndexJob {
     name,
     source: src,
     reindex: !!params.reindex,
+    forceOcr: !!params.forceOcr,
     status: "queued",
     progress: "queued",
     queuedAt: Date.now(),
@@ -513,16 +515,18 @@ export default function (pi: ExtensionAPI) {
     label: "Index Document",
     renderCall: renderToolCall,
     description:
-      "Index a PDF (path, URL, DOI, or arXiv id) into the knowledge base. Runs in the background: queues the job and returns immediately; searchable when it finishes. Text PDFs are extracted locally (pdfjs); scanned PDFs route to MinerU OCR if OCR_BASE_URL is set.",
+      "Index a PDF (path, URL, DOI, or arXiv id) into the knowledge base. Runs in the background: queues the job and returns immediately; searchable when it finishes. Text PDFs are extracted locally (pdfjs); scanned PDFs (or forceOcr=true) route to MinerU OCR if OCR_BASE_URL is set.",
     promptSnippet: "Index a PDF into the knowledge base (background)",
     promptGuidelines: [
       "Asynchronous: queues and returns immediately. Watch document_status for progress.",
       "Queue papers as soon as you find them (don't batch at the end).",
+      "Pass forceOcr=true to run MinerU OCR even on text PDFs (use when pdfjs mangles the math; needs OCR_BASE_URL).",
     ],
     parameters: Type.Object({
       source: Type.String({ description: "Local path, https URL, DOI, or arXiv id of the PDF." }),
       name: Type.Optional(Type.String({ description: "Optional slug/name for the document (defaults to filename/DOI)." })),
       reindex: Type.Optional(Type.Boolean({ description: "Replace any existing chunks for this document (default false)." })),
+      forceOcr: Type.Optional(Type.Boolean({ description: "Force MinerU OCR even on text PDFs (preserves math; slower; needs OCR_BASE_URL)." })),
     }),
     async execute(_id: string, params: any, _signal?: AbortSignal, _onUpdate?: any, ctx?: any) {
       try {
