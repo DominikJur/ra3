@@ -1,0 +1,8 @@
+% Compile: pdflatex hessian.tex  (or paste into Overleaf)
+% Output: a tightly-cropped, white-background PDF of just the equation.
+\documentclass[border=4pt]{standalone}
+\usepackage{amsmath}
+\begin{document}
+$
+ \mathbf{H}[\phi] = \begin{bmatrix} \frac{\partial^2 L}{\partial \phi_0^2} & \frac{\partial^2 L}{\partial \phi_0 \partial \phi_1} &\cdots & \frac{\partial^2 L}{\partial \phi_0 \partial \phi_N} \\[2pt] \frac{\partial^2 L}{\partial \phi_1 \partial \phi_0} & \frac{\partial^2 L}{\partial \phi_1^2} & \cdots & \frac{\partial^2 L}{\partial \phi_1 \partial \phi_N} \\[2pt] \vdots & \vdots & \ddots & \vdots \\[2pt] \frac{\partial^2 L}{\partial \phi_N \partial \phi_0} & \frac{\partial^2 L}{\partial \phi_N \partial \phi_1} & \cdots &\frac{\partial^2 L}{\partial \phi_N^2} \end{bmatrix} $
+\end{document}
