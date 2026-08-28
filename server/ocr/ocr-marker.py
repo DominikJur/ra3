@@ -13,7 +13,7 @@
 # Inference backend: Surya talks to an OpenAI-compatible /v1/chat/completions server.
 #   SURYA_INFERENCE_URL  (default http://127.0.0.1:8000/v1) — set this to your vLLM server;
 #   SURYA_INFERENCE_BACKEND (default vllm). With SURYA_INFERENCE_URL set, no spawning happens.
-# See server/ocr/README.md for the full server deployment.
+# See server/ocr/README.md for the full deployment.
 import json
 import os
 import re
@@ -352,7 +352,7 @@ async def file_parse(files: list[UploadFile] = File(...)):
     return {"results": out}
 
 
-# ---- async jobs: one upload, server computes, client polls ------------------
+# ---- async jobs: one upload, the server computes, client polls -------------
 # Storm-friendly: POST /jobs returns the job id immediately (short tunnel
 # window), the work runs here regardless of the tunnel, and GET /jobs/{id}
 # answers with tiny requests whenever the client can get through. Results and

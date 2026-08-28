@@ -175,12 +175,12 @@ exactly-once claims) and resilient to outages: when the embed/OCR servers are un
 **Fire-and-forget batch indexing (close the PC):**
 
 ```
-document_submit({ sources: ["a.pdf", "b.pdf", "book.pdf"] })  # one async server job; server runs OCR+chunk+embed
-# ... server keeps working while your machine is off ...
+document_submit({ sources: ["a.pdf", "b.pdf", "book.pdf"] })  # one async job; your OCR server runs OCR+chunk+embed
+# ... the server keeps working while your machine is off ...
 document_pull()                                                # merge finished KB entries (download + import)
 ```
 
-CLI equivalent: `node server-jobs.mjs <submit|status|pull>`.
+CLI equivalent: `node remote-jobs.mjs <submit|status|pull>`.
 
 OCR: `OCR_MODE=always` (default) routes every PDF through the OCR server at `OCR_BASE_URL`; set
 `OCR_MODE=auto` (scanned only) or `off` to change. Two interchangeable servers ship in
@@ -273,7 +273,7 @@ and its grounded answer live in `demo/README.md` and `demo/answer.md`.
   `pdf_extract`). `lib/kb-sqlite.ts` is the KB engine, `lib/queue.ts` the multi-process SQLite
   queue, `lib/remote-jobs.ts` the submit/pull client.
 - `export-kb.mjs` / `import-kb.mjs`: standalone CLI wrappers for KB snapshot/merge.
-- `server-jobs.mjs`: remote batch CLI (`submit` / `status` / `pull`).
+- `remote-jobs.mjs`: remote batch CLI (`submit` / `status` / `pull`).
 - `kb-state.mjs`: KB viewer — `node kb-state.mjs` lists every document with its real title,
   embedding model, OCR method and sizes; `node kb-state.mjs <index|slug>` shows full metadata
   (source, chunk spread, sections, provenance).

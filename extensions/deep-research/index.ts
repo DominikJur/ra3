@@ -871,7 +871,7 @@ export default function (pi: ExtensionAPI) {
           queue.length
             ? `${queue.length} job(s) in the background queue`
             : 'No indexing jobs in queue',
-          `${(await readPendingJobs().catch(() => [])).filter((j) => !j.pulled).length} remote job(s) on server awaiting pull (document_pull)`,
+          `${(await readPendingJobs().catch(() => [])).filter((j) => !j.pulled).length} remote job(s) on the OCR server awaiting pull (document_pull)`,
         ]
           .filter((l) => !l.startsWith('0 remote'))
           .join('\n');
@@ -982,8 +982,8 @@ export default function (pi: ExtensionAPI) {
     label: 'Submit Remote Batch',
     renderCall: renderToolCall,
     description:
-      "Fire-and-forget: upload one or more PDFs to the server OCR server as a single async job and return immediately. server keeps OCRing in the background even if this PC is turned off (results persist on the server). Run document_pull later (from anywhere with the KB) to fetch the finished markdown, chunk, embed and ingest it into the knowledge base.",
-    promptSnippet: 'Submit PDFs to server for background OCR (works while PC is off)',
+      "Fire-and-forget: upload one or more PDFs to your OCR server as a single async job and return immediately. The server keeps OCRing in the background even if this PC is turned off (results persist on the server). Run document_pull later (from anywhere with the KB) to fetch the finished markdown, chunk, embed and ingest it into the knowledge base.",
+    promptSnippet: 'Submit PDFs to the OCR server for background OCR (works while PC is off)',
     promptGuidelines: [
       'Use when indexing many/big PDFs and you want to close the PC: submit now, pull later.',
       'Each file becomes one KB document (slug from filename, unless name is given).',
@@ -1002,7 +1002,7 @@ export default function (pi: ExtensionAPI) {
           status: 'submitted',
           job_id,
           files: files.map((f) => ({ name: f.name, slug: f.slug })),
-          note: 'server will OCR these in the background (survives this PC being off). Run document_pull when you are back to ingest the results.',
+          note: 'the server will OCR these in the background (survives this PC being off). Run document_pull when you are back to ingest the results.',
         };
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }], details: result };
       } catch (e) {
@@ -1016,11 +1016,11 @@ export default function (pi: ExtensionAPI) {
     label: 'Pull Remote Batch Results',
     renderCall: renderToolCall,
     description:
-      'Fetch finished server OCR jobs (submitted with document_submit) and ingest them into the knowledge base: per-page markdown -> chunk -> embed (BGE-M3) -> ingest. Skips slugs already indexed unless replace:true.',
+      'Fetch finished OCR jobs (submitted with document_submit) and ingest them into the knowledge base: per-page markdown -> chunk -> embed (BGE-M3) -> ingest. Skips slugs already indexed unless replace:true.',
     promptSnippet: 'Pull finished remote OCR jobs into the KB',
     promptGuidelines: [
       'Idempotent: run repeatedly; already-pulled jobs and existing slugs are skipped.',
-      'Jobs still running on server are reported as waiting — run again later.',
+      'Jobs still running on the server are reported as waiting — run again later.',
     ],
     parameters: Type.Object({
       replace: Type.Optional(

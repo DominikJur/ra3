@@ -22,7 +22,7 @@ GET  /jobs/<id>  -> {"status": "queued|processing|done|error", "md_content": "..
 `md_content` is markdown with `<!-- page N -->` markers separating pages. `lib/ocr.ts` splits on
 those markers, so no client changes are needed for correct page numbers.
 
-The client uses the **async** `/jobs` flow first (one upload, server computes in the background,
+The client uses the **async** `/jobs` flow first (one upload, the server computes in the background,
 client polls with tiny requests) and falls back to sync `/file_parse` for servers without `/jobs`
 (e.g. ocr-light). Async survives VPN/tunnel flap storms: every step needs only a short connection.
 
@@ -70,7 +70,7 @@ Notes from a real deployment (RTX 5060 Ti 16 GB, Arch, GCC 16):
 Then run the server (port 8002 = `OCR_BASE_URL` default):
 
 ```bash
-scp ocr-marker.py server:~/   # or wherever the server lives
+scp ocr-marker.py <your-server>:~/   # or wherever the server lives
 SURYA_INFERENCE_URL=http://127.0.0.1:8000/v1 \
 setsid nohup ~/marker-venv/bin/python ~/ocr-marker.py > ~/marker-ocr.log 2>&1 &
 curl -s http://127.0.0.1:8002/health   # {"ok":true,"ocr":"marker/surya-2"}

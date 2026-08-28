@@ -105,7 +105,7 @@ function mdResult(md: string) {
   return { sections: markdownToSections(md), pageCount: sectionsPageGuess(md) };
 }
 
-// Storm-friendly OCR: POST /jobs (async) returns a job id immediately, server
+// Storm-friendly OCR: POST /jobs (async) returns a job id immediately, the server
 // computes in the background, and we poll GET /jobs/{id} with tiny requests —
 // each poll needs only a short tunnel window, so VPN flap storms can't kill a
 // 20-minute OCR run. Falls back to the sync /file_parse contract for servers

@@ -1,5 +1,5 @@
-// Fire-and-forget remote batch indexing: upload PDFs to the server OCR server as
-// ONE multi-file async job, close the PC — server OCRs, chunks, embeds and builds
+// Fire-and-forget remote batch indexing: upload PDFs to your OCR server as
+// ONE multi-file async job, close the PC — the server OCRs, chunks, embeds and builds
 // per-doc KB sqlite bundles entirely on the server (results persist under
 // ~/.ocr-jobs/) — and pull the finished KB bundles back whenever you return.
 // The pull is just a download + importKb merge: no chunking/embedding on the
@@ -59,7 +59,7 @@ async function fetchWithRetry(url: string, init: RequestInit, attempts = MAX_ATT
   throw lastErr ?? new Error('fetch failed');
 }
 
-// Upload one or more PDFs as a single server job; record it as pending.
+// Upload one or more PDFs as a single remote job; record it as pending.
 export async function submitRemoteJob(
   sources: string[],
   opts: { name?: string } = {},
@@ -80,7 +80,7 @@ export async function submitRemoteJob(
     slugMap[stem] = slug;
     fd.append('files', new Blob([buf as unknown as BlobPart], { type: 'application/pdf' }), name);
   }
-  // ask server to also build per-doc KB bundles (chunk + embed + sqlite)
+  // ask the server to also build per-doc KB bundles (chunk + embed + sqlite)
   fd.append('kb', '1');
   fd.append('slugs', JSON.stringify(slugMap));
 
@@ -152,7 +152,7 @@ export async function pullFinishedJobs(opts: { replace?: boolean } = {}): Promis
         continue;
       }
       const entry = results[f.stem] ?? {};
-      // Preferred path: server already chunked + embedded -> download the KB
+      // Preferred path: the server already chunked + embedded -> download the KB
       // bundle and merge it (no local OCR/chunk/embed work at all).
       if (typeof entry.kb_bundle === 'string') {
         try {
@@ -163,7 +163,7 @@ export async function pullFinishedJobs(opts: { replace?: boolean } = {}): Promis
         } catch (e) {
           // fall through to the markdown path below (bundle broken -> rebuild locally)
           if (entry.kb_error) {
-            failed.push({ job_id: job.job_id, error: `${f.slug}: kb bundle failed on server: ${entry.kb_error}` });
+            failed.push({ job_id: job.job_id, error: `${f.slug}: kb bundle failed on the server: ${entry.kb_error}` });
             continue;
           }
         }

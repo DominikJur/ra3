@@ -47,9 +47,9 @@ Real LaTeX in the Markdown (must render on GitHub/VS Code):
 - `unpaywall_resolver(doi)` → `{ is_oa, pdf, ... }`
 - `pdf_extract(url?|doi?, mode="text"|"render", pages?, dpi?)`
 - `document_index(source, name?, reindex?)` → queue for background indexing (async, exactly-once)
-- `document_submit(sources[], name?)` → upload N PDFs to server as ONE fire-and-forget job (OCR +
+- `document_submit(sources[], name?)` → upload N PDFs to your OCR server as ONE fire-and-forget job (OCR +
   chunk + embed all server-side; close the PC, pull later)
-- `document_pull(replace?)` → download finished server jobs and merge them into the KB
+- `document_pull(replace?)` → download finished remote jobs and merge them into the KB
 - `document_search(query, k?, docs?, keyword?)` → top-k chunks (keyword=false = dense-only)
 - `document_page(doc, page)` → full text of one page (for exact equations/derivations)
 - `document_status()` → indexed docs + queue

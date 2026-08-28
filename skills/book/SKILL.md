@@ -33,11 +33,11 @@ description: Local knowledge base over indexed books and papers. Index PDFs and 
   per-page markers). Exception: `langtangen-fdm` — book page = PDF page − 24.
 
 ## Fire-and-forget batch indexing (close the PC)
-- **`document_submit({ sources: [paths...] })`** uploads several PDFs to server as ONE async job
-  and returns immediately — server runs the FULL pipeline in the background even with this PC
+- **`document_submit({ sources: [paths...] })`** uploads several PDFs to your OCR server as ONE async job
+  and returns immediately — the server runs the FULL pipeline in the background even with this PC
   off: OCR (Marker 2) → chunk → embed (BGE-M3) → per-doc KB bundle (sqlite). Results persist
   on the server.
-- **`document_pull({ replace? })`** (or `node server-jobs.mjs pull`) downloads the finished KB
+- **`document_pull({ replace? })`** (or `node remote-jobs.mjs pull`) downloads the finished KB
   bundles and merges them into kb.sqlite — no chunking/embedding on your machine. Idempotent;
   jobs still running are reported as waiting. `document_status` shows pending remote jobs.
-- CLI equivalent: `node server-jobs.mjs <submit|status|pull>`.
+- CLI equivalent: `node remote-jobs.mjs <submit|status|pull>`.
