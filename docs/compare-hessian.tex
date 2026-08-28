@@ -1,0 +1,38 @@
+% Compile: pdflatex compare-hessian.tex  (white background, tightly cropped)
+\documentclass[border=8pt]{standalone}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+\usepackage{array}
+\begin{document}
+\begin{minipage}[c]{7.2cm}
+\centering
+\begin{tabular}{@{}>{\ttfamily\small}l@{}}
+2 2 2\\
+$\partial$ L $\partial$ L $\partial$ L\\
+. . . 2\\
+$\partial$$\phi$ $\partial$$\phi$ $\partial$$\phi$ $\partial$$\phi$\\
+$\partial$$\phi$ 0 1 0 N\\
+0\\
+\\
+2 2 2\\
+$\partial$ L $\partial$ L $\partial$ L\\
+. . .\\
+2\\
+$\partial$$\phi$ $\partial$$\phi$ $\partial$$\phi$ $\partial$$\phi$\\
+1 0 $\partial$$\phi$ 1\\
+N\\
+1\\
+\\
+H[$\phi$] = . (6.19)
+\end{tabular}\\[8pt]
+{\scriptsize\itshape naive extraction (PDF text layer)}
+\end{minipage}
+\hspace{24pt}
+\begin{minipage}[c]{9.5cm}
+\centering
+$
+ \mathbf{H}[\phi] = \begin{bmatrix} \frac{\partial^2 L}{\partial \phi_0^2} & \frac{\partial^2 L}{\partial \phi_0 \partial \phi_1} &\cdots & \frac{\partial^2 L}{\partial \phi_0 \partial \phi_N} \\[2pt] \frac{\partial^2 L}{\partial \phi_1 \partial \phi_0} & \frac{\partial^2 L}{\partial \phi_1^2} & \cdots & \frac{\partial^2 L}{\partial \phi_1 \partial \phi_N} \\[2pt] \vdots & \vdots & \ddots & \vdots \\[2pt] \frac{\partial^2 L}{\partial \phi_N \partial \phi_0} & \frac{\partial^2 L}{\partial \phi_N \partial \phi_1} & \cdots &\frac{\partial^2 L}{\partial \phi_N^2} \end{bmatrix}
+$\\[8pt]
+{\scriptsize\itshape ours: OCR with exact math (Marker 2 / Surya 2)}
+\end{minipage}
+\end{document}
