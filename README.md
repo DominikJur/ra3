@@ -46,6 +46,28 @@ tunnel can't kill a long OCR run). The same server can run the whole pipeline re
 `document_pull`). The only out-of-process compute is an embedding server you run yourself: CPU or
 GPU, or rented: see `server/`.
 
+## Scaling the KB
+
+Dense retrieval degrades as the corpus grows — faster than sparse retrieval does. Reimers &
+Gurevych (ACL 2021, arXiv:2012.14210) show that DPR-class dense models beat BM25 from ~10k up to
+~1M index entries but lose at 8.8M (MS MARCO scale); the mechanism is distance/cosine
+concentration in high-dimensional space (more "accidentally close" vectors crowd out the true
+neighbor). RA³ mitigates this with BGE-M3 (trained/evaluated on MS MARCO's 8.8M passages) and
+hybrid fusion (dense + BM25 + learned-sparse via RRF), which pushes the accuracy danger zone out
+to roughly 1–2M chunks.
+
+The binding constraint for the current stack is therefore **not accuracy but latency**:
+`sqlite-vec` vec0 performs an *exact* (brute-force) scan — zero ANN recall loss, but O(N) per
+query on top of the embedding-server round-trip. In practice expect the **~500k–1M chunk tipping
+point**: beyond it, query latency (not wrong answers) is what you notice first.
+
+Mitigations as the KB grows: raise `k`, add a reranking stage (e.g. `bge-reranker-v2-m3`), use
+per-doc `docs=` filters for cross-domain queries, and only if you exceed ~1M chunks, move the
+dense leg to an indexed ANN (HNSW/IVF) — accepting a recall-vs-speed trade while keeping hybrid.
+The reranker runs on the user's machine, so pick one that is **fast locally**: a cross-encoder on
+CPU is fine for a few hundred candidates, but at larger candidate sets its latency can easily
+exceed the vector-search time and dominate the query path (see `server/` for GPU-hosted options).
+
 ## A small addition to pi
 
 RA³ is not a fork or rewrite of pi: it's a focused set of **open-source contributions on top of
