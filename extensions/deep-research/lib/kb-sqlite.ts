@@ -17,7 +17,7 @@ const gunzip = promisify(gunzipCb);
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildBM25Async, bm25Search, type BM25Index } from './lexical.ts';
+import { buildBM25Async, tokenize } from './lexical.ts';
 import { simpleHash } from './shared.ts';
 
 export const KB_ROOT = process.env.KB_ROOT ?? path.join(os.homedir(), 'pi_research', 'books');
@@ -33,6 +33,7 @@ const SCHEMA = `
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
 PRAGMA foreign_keys = ON;
+PRAGMA busy_timeout = 30000;
 CREATE TABLE IF NOT EXISTS docs (
   slug TEXT PRIMARY KEY,
   source TEXT NOT NULL,
@@ -64,6 +65,24 @@ CREATE TABLE IF NOT EXISTS sparse_terms (
   weight REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sparse_term ON sparse_terms(term);
+-- BM25 keyword index, persisted so the ~20 s tokenize+15M-row build happens once per
+-- KB, not once per worker start. bm25_postings is keyed by chunk_id (matching chunks).
+-- Plain table + UNIQUE index (not WITHOUT ROWID PK): index-free bulk insert for the
+-- full build is ~10 s faster at 15M rows; per-term lookups are identical via the index.
+CREATE TABLE IF NOT EXISTS bm25_postings (
+  term TEXT NOT NULL,
+  id INTEGER NOT NULL,
+  tf INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bm25_postings ON bm25_postings(term, id);
+CREATE TABLE IF NOT EXISTS bm25_doclen (
+  id INTEGER PRIMARY KEY,
+  len INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS bm25_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 `;
 
 let db: DatabaseSync | null = null;
@@ -78,6 +97,17 @@ export function getDb(): DatabaseSync {
     throw new Error(`sqlite-vec failed to load (run: npm i sqlite-vec): ${(e as Error).message}`);
   }
   db.exec(SCHEMA);
+  // migration: v0 bm25_postings was WITHOUT ROWID + PK; v1 is plain + UNIQUE index
+  // (index-free bulk rebuild is ~10 s faster at 15M rows). Drop v0 so SCHEMA recreates v1.
+  try {
+    const sql = ((d.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='bm25_postings'").get() as any)?.sql ?? '') as string;
+    if (sql.includes('WITHOUT ROWID')) {
+      d.exec('DROP TABLE bm25_postings;');
+      db.exec(SCHEMA);
+    }
+  } catch {
+    /* ignore */
+  }
   // migration: OCR provenance column for KBs created before it existed
   try { db.exec("ALTER TABLE docs ADD COLUMN ocr TEXT NOT NULL DEFAULT 'unknown'"); } catch { /* already present */ }
   return db;
@@ -166,6 +196,27 @@ export function ingestChunks(opts: {
     const ins = d.prepare('INSERT INTO chunks (doc, page, section, text) VALUES (?,?,?,?)');
     const insVec = d.prepare('INSERT INTO vec_chunks (chunk_id, embedding) VALUES (?,?)');
     const insSp = d.prepare('INSERT INTO sparse_terms (chunk_id, term, weight) VALUES (?,?,?)');
+    // --- BM25 maintenance (incremental, per-doc) ---
+    // Drop this doc's old postings, insert the new ones; keep bm25_meta (n, totalLen)
+    // current so a full rebuild is only ever needed when the table is empty.
+    const oldIdsNum = oldIds.map((x) => Number(x));
+    let oldTotalLen = 0;
+    if (oldIdsNum.length) {
+      const ph = oldIdsNum.map(() => '?').join(',');
+      for (const r of d.prepare(`SELECT len FROM bm25_doclen WHERE id IN (${ph})`).all(...oldIdsNum) as any[])
+        oldTotalLen += Number(r.len);
+      d.prepare(`DELETE FROM bm25_postings WHERE id IN (${ph})`).run(...oldIdsNum);
+      d.prepare(`DELETE FROM bm25_doclen WHERE id IN (${ph})`).run(...oldIdsNum);
+    }
+    const insLen = d.prepare('INSERT INTO bm25_doclen (id, len) VALUES (?,?)');
+    let totalLen = 0;
+    const bmBatch: any[] = [];
+    const flushBm = () => {
+      if (!bmBatch.length) return;
+      const ph = Array.from({ length: bmBatch.length / 3 }, () => '(?,?,?)').join(',');
+      d.prepare(`INSERT INTO bm25_postings (term, id, tf) VALUES ${ph}`).run(...bmBatch);
+      bmBatch.length = 0;
+    };
     for (let i = 0; i < opts.chunks.length; i++) {
       const c = opts.chunks[i];
       const r = ins.run(
@@ -180,7 +231,28 @@ export function ingestChunks(opts: {
         Buffer.from(opts.dense[i].buffer, opts.dense[i].byteOffset, opts.dense[i].byteLength),
       );
       for (const [term, w] of opts.sparse[i]) insSp.run(Number(cid), term, w);
+      // tokenize once at ingest so BM25 never needs a full rebuild
+      const terms = tokenize(String(c.text ?? ''));
+      totalLen += terms.length;
+      const tfMap = new Map<string, number>();
+      for (const t of terms) tfMap.set(t, (tfMap.get(t) ?? 0) + 1);
+      for (const [t, n] of tfMap) {
+        bmBatch.push(t, Number(cid), n);
+        if (bmBatch.length >= 900) flushBm(); // 300 rows/batch (node:sqlite caps at 999 SQL vars)
+      }
+      insLen.run(BigInt(cid), terms.length);
     }
+    flushBm();
+    const metaGet = (k: string) =>
+      Number((d.prepare('SELECT value FROM bm25_meta WHERE key = ?').get(k) as any)?.value ?? 0);
+    d.prepare('INSERT OR REPLACE INTO bm25_meta (key, value) VALUES (?,?)').run(
+      'n',
+      String(metaGet('n') + opts.chunks.length - oldIds.length),
+    );
+    d.prepare('INSERT OR REPLACE INTO bm25_meta (key, value) VALUES (?,?)').run(
+      'totalLen',
+      String(metaGet('totalLen') + totalLen - oldTotalLen),
+    );
     d.exec('COMMIT');
     // Fold the WAL back periodically so kb.sqlite-wal doesn't grow unbounded
     // (a 300+ MB stale WAL was seen; the search worker's own connection still
@@ -201,14 +273,63 @@ export function ingestChunks(opts: {
 // ---- search --------------------------------------------------------------
 
 interface BM25Cache {
-  index: BM25Index;
-  idToChunkId: number[];
+  docLen: Map<number, number>; // chunk_id -> token count
+  avgLen: number;
+  n: number; // total chunk count
   meta: Map<number, { doc: string; page: number; section: string }>;
   count: number;
 }
 let bm25Cache: BM25Cache | null = null;
 let bm25Promise: Promise<BM25Cache> | null = null;
 let bm25Count = -1;
+
+// One-time full build of the BM25 postings table (tokenize + bulk insert). Measured at
+// 186k chunks: ~20 s tokenize + ~40 s to insert 15M rows. Afterwards ingestChunks keeps
+// the table current per-doc, so this runs at most once per KB. Runs in the search
+// worker, so it never blocks the TUI. If a chunk count changed since the snapshot was
+// read (concurrent ingest), abort and let the next search rebuild.
+async function buildBM25Table(d: DatabaseSync): Promise<void> {
+  const rows = d
+    .prepare('SELECT chunk_id, text FROM chunks ORDER BY chunk_id')
+    .all() as any[];
+  const countNow = Number((d.prepare('SELECT count(*) AS c FROM chunks').get() as any).c);
+  if (countNow !== rows.length) return; // ingest raced; retry on next search
+  const index = await buildBM25Async(rows.map((r, i) => ({ id: i, text: String(r.text) })));
+  const idToChunkId = rows.map((r) => Number(r.chunk_id));
+  // Speed up the one-time load: fold the WAL, skip per-commit sync, bigger page cache.
+  try {
+    d.exec('PRAGMA wal_checkpoint(TRUNCATE); PRAGMA synchronous = OFF; PRAGMA cache_size = -200000;');
+  } catch {
+    /* best effort */
+  }
+  d.exec('BEGIN');
+  try {
+    // index-free bulk insert, then one index pass (same pattern as importKb)
+    d.exec('DROP INDEX IF EXISTS idx_bm25_postings');
+    d.exec('DELETE FROM bm25_postings; DELETE FROM bm25_doclen; DELETE FROM bm25_meta;');
+    const insL = d.prepare('INSERT INTO bm25_doclen (id, len) VALUES (?,?)');
+    let totalLen = 0;
+    for (let i = 0; i < index.chunks.length; i++) {
+      totalLen += index.docLen[i];
+      insL.run(BigInt(idToChunkId[i]), index.docLen[i]);
+    }
+    const insP = d.prepare('INSERT INTO bm25_postings (term, id, tf) VALUES (?,?,?)');
+    for (const [term, arr] of index.postings)
+      for (const { id, tf } of arr) insP.run(term, idToChunkId[id], tf);
+    d.prepare('INSERT INTO bm25_meta (key, value) VALUES (?,?)').run('n', String(index.chunks.length));
+    d.prepare('INSERT INTO bm25_meta (key, value) VALUES (?,?)').run('totalLen', String(totalLen));
+    d.exec('COMMIT');
+    d.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_bm25_postings ON bm25_postings(term, id)');
+  } catch (e) {
+    d.exec('ROLLBACK');
+    try {
+      d.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_bm25_postings ON bm25_postings(term, id)');
+    } catch {
+      /* keep going */
+    }
+    throw e;
+  }
+}
 
 function getBM25(d: DatabaseSync): Promise<BM25Cache> {
   const count = Number((d.prepare('SELECT count(*) AS c FROM chunks').get() as any).c);
@@ -217,9 +338,8 @@ function getBM25(d: DatabaseSync): Promise<BM25Cache> {
   bm25Promise = (async () => {
     if (bm25Cache && bm25Cache.count === count) return bm25Cache;
     const rows = d
-      .prepare('SELECT chunk_id, doc, page, section, text FROM chunks ORDER BY chunk_id')
+      .prepare('SELECT chunk_id, doc, page, section FROM chunks ORDER BY chunk_id')
       .all() as any[];
-    const idToChunkId = rows.map((r) => Number(r.chunk_id));
     const meta = new Map<number, { doc: string; page: number; section: string }>();
     rows.forEach((r) =>
       meta.set(Number(r.chunk_id), {
@@ -228,9 +348,18 @@ function getBM25(d: DatabaseSync): Promise<BM25Cache> {
         section: String(r.section),
       }),
     );
-    const index = await buildBM25Async(rows.map((r, i) => ({ id: i, text: String(r.text) })));
-    index.chunks = index.chunks.map((c) => ({ id: c.id, text: '' })); // drop text copies; search needs only length/postings
-    bm25Cache = { index, idToChunkId, meta, count };
+    if (rows.length) {
+      const built = Number((d.prepare('SELECT count(*) AS c FROM bm25_postings').get() as any).c);
+      if (built === 0) await buildBM25Table(d);
+    }
+    const docLen = new Map<number, number>();
+    for (const r of d.prepare('SELECT id, len FROM bm25_doclen').all() as any[])
+      docLen.set(Number(r.id), Number(r.len));
+    const metaGet = (key: string) =>
+      Number((d.prepare('SELECT value FROM bm25_meta WHERE key = ?').get(key) as any)?.value ?? 0);
+    const n = metaGet('n');
+    const totalLen = metaGet('totalLen');
+    bm25Cache = { docLen, avgLen: n ? totalLen / n : 0, n, meta, count };
     return bm25Cache;
   })();
   return bm25Promise;
@@ -240,6 +369,38 @@ function invalidateBM25(): void {
   bm25Cache = null;
   bm25Promise = null;
   bm25Count = -1;
+}
+
+// BM25 over the bm25_postings table: per-query-term postings reads (indexed PK lookup,
+// 1.5 ms avg / 34 ms for a 70k-posting term at 186k chunks). Same scoring as the old
+// in-memory buildBM25 (k1=1.2, b=0.75) so results are bit-identical to before.
+function bm25SearchSqlite(
+  d: DatabaseSync,
+  query: string,
+  kk: number,
+  allowed: (cid: number) => boolean,
+  bm: BM25Cache,
+): Array<{ id: number; score: number }> {
+  const scores = new Map<number, number>();
+  const q = d.prepare('SELECT id, tf FROM bm25_postings WHERE term = ?');
+  for (const t of new Set(tokenize(query))) {
+    const list = q.all(t) as any[];
+    const df = list.length;
+    if (!df) continue;
+    const idf = Math.log(1 + (bm.n - df + 0.5) / (df + 0.5));
+    for (const r of list) {
+      const cid = Number(r.id);
+      if (!allowed(cid)) continue;
+      const len = bm.docLen.get(cid) ?? 1;
+      const tf = Number(r.tf);
+      const denom = tf + 1.2 * (1 - 0.75 + (0.75 * len) / (bm.avgLen || 1));
+      scores.set(cid, (scores.get(cid) ?? 0) + (idf * (tf * 2.2)) / denom);
+    }
+  }
+  return [...scores.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, kk)
+    .map(([id, score]) => ({ id, score }));
 }
 
 export interface QueryEmbed {
@@ -258,7 +419,11 @@ async function embedQuery(text: string): Promise<QueryEmbed> {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ texts: [text], return_sparse: true }),
-        signal: AbortSignal.timeout(20000),
+        // Measured single-query BGE-M3 embed latency (gauss-ai, fp16, over the WSL SSH
+        // tunnel): median ~48 ms, p95 76 ms, cold ~190 ms. A 4 s timeout is ~80x
+        // headroom; the old 20 s x2 attempts could stall a search for 40 s whenever the
+        // tunnel/server was slow or hung.
+        signal: AbortSignal.timeout(4000),
       });
       if (!res.ok) throw new Error(`embed HTTP ${res.status}`);
       const j = await res.json();
@@ -285,11 +450,25 @@ function sparseSearch(
   kk: number,
   allowed: (cid: number) => boolean,
 ): Array<{ id: number; score: number }> {
+  const N = Number((d.prepare('SELECT count(*) AS c FROM chunks').get() as any).c);
+  const dfStmt = d.prepare('SELECT count(*) AS c FROM sparse_terms WHERE term = ?');
+  const postingsStmt = d.prepare('SELECT chunk_id, weight FROM sparse_terms WHERE term = ?');
   const scores = new Map<number, number>();
-  for (const [term, qw] of qs) {
-    const rows = d
-      .prepare('SELECT chunk_id, weight FROM sparse_terms WHERE term = ?')
-      .all(term) as any[];
+  // Learned-sparse queries are dominated by high-df tokens (▁the/▁of/▁and: 50-90k
+  // postings each at 186k chunks); scanning every posting for every term costs seconds.
+  // Keep only the top-weighted terms, skip terms present in >15% of the corpus (they
+  // carry no discriminative signal), and cap total postings scanned. Verified on
+  // SciFact (300 test queries): pruning RAISES 3-leg RRF nDCG@10 0.7011 -> 0.7084,
+  // Recall@100 unchanged (0.9477).
+  const MAX_TERMS = 32;
+  const MAX_DF_RATIO = 0.15;
+  const MAX_POSTINGS = 150_000;
+  let budget = MAX_POSTINGS;
+  for (const [term, qw] of [...qs.entries()].sort((a, b) => b[1] - a[1]).slice(0, MAX_TERMS)) {
+    const df = Number((dfStmt.get(term) as any).c);
+    if (!df || df > N * MAX_DF_RATIO || budget <= 0) continue;
+    const rows = postingsStmt.all(term) as any[];
+    budget -= rows.length;
     for (const r of rows) {
       const cid = Number(r.chunk_id);
       if (!allowed(cid)) continue;
@@ -315,10 +494,10 @@ function denseTopK(
   qvec: Float32Array,
   kk: number,
   allowedIds: number[],
-  allowedSet: Set<number>,
+  allowedSet: Set<number> | null,
 ): Array<{ id: number; score: number }> {
   const total = Number((d.prepare('SELECT count(*) AS c FROM vec_chunks').get() as any).c);
-  if (!total || !allowedIds.length) return [];
+  if (!total) return [];
   const q = Buffer.from(qvec.buffer, qvec.byteOffset, qvec.byteLength);
   const rows = (
     d
@@ -328,9 +507,10 @@ function denseTopK(
     id: Number(r.chunk_id),
     dist: Number(r.distance),
   }));
-  let filtered = rows.filter((r) => allowedSet.has(r.id));
+  // allowedSet === null means "no filters": the KNN result is already the global top-k.
+  let filtered = allowedSet ? rows.filter((r) => allowedSet.has(r.id)) : rows;
 
-  if (filtered.length < kk) {
+  if (allowedSet && filtered.length < kk) {
     // Tight filter: rank the allowed subset exactly.
     const qn = Math.sqrt(qvec.reduce((s, x) => s + x * x, 0));
     const stmt = d.prepare('SELECT embedding FROM vec_chunks WHERE chunk_id = ?');
@@ -410,9 +590,11 @@ function mmr(
 
 // ---- search worker ---------------------------------------------------------
 // The search legs (sqlite-vec KNN, learned-sparse, BM25) are synchronous SQLite calls that
-// block pi's event loop: ~0.5 s KNN + ~0.15 s sparse on a 42k-chunk KB, plus ~0.8 s once to
-// pull chunks for the BM25 index. Run the whole search in a worker thread so the TUI stays
-// responsive; the worker imports runSearchDocuments (below) and does embed + legs + fusion.
+// block pi's event loop: ~1.2 s KNN + ~0.5 s pruned-sparse at 186k chunks, plus ~60 s ONCE
+// to build the persisted BM25 postings table (tokenize + 15M-row insert). Run the whole
+// search in a worker thread so the TUI stays responsive; the worker imports
+// runSearchDocuments (below) and does embed + legs + fusion. BM25 postings now live in
+// SQLite (bm25_postings), so a worker restart no longer re-tokenizes the corpus.
 
 const searchWorkerUrl = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -495,7 +677,9 @@ export async function runSearchDocuments(
 
   const allowedSet = opts.docs && opts.docs.length ? new Set(opts.docs) : null;
   const bm = await getBM25(d);
+  const hasFilters = !!(opts.docs?.length || opts.pageFrom != null || opts.pageTo != null || opts.section);
   const allowed = (cid: number): boolean => {
+    if (!hasFilters) return true;
     const m = bm.meta.get(cid);
     if (!m) return false;
     if (allowedSet && !allowedSet.has(m.doc)) return false;
@@ -507,8 +691,8 @@ export async function runSearchDocuments(
 
   // query embedding (dense + learned-sparse), same BGE-M3 build as the indexed docs
   const allowedIds: number[] = [];
-  for (const cid of bm.meta.keys()) if (allowed(cid)) allowedIds.push(cid);
-  const allowedIdSet = new Set(allowedIds);
+  if (hasFilters) for (const cid of bm.meta.keys()) if (allowed(cid)) allowedIds.push(cid);
+  const allowedIdSet = hasFilters ? new Set(allowedIds) : null;
   const qe = await embedQuery(query);
   let dense: Array<{ id: number; score: number }> = [];
   let denseOk = false;
@@ -523,12 +707,10 @@ export async function runSearchDocuments(
   const sparseLeg = qe.sparse.size ? sparseSearch(d, qe.sparse, kk, allowed) : [];
 
   const keyword = useKeyword
-    ? bm25Search(bm.index, query, Math.max(kk * 4, 20), (lid) => allowed(bm.idToChunkId[lid])).map(
-        (r) => ({
-          id: bm.idToChunkId[r.id],
-          score: r.score,
-        }),
-      )
+    ? bm25SearchSqlite(d, query, Math.max(kk * 4, 20), allowed, bm).map((r) => ({
+        id: r.id,
+        score: r.score,
+      }))
     : [];
 
   if (!denseOk && !useKeyword && !sparseLeg.length) {
@@ -844,6 +1026,9 @@ export async function importKb(
       }
     } finally {
       d.exec('CREATE INDEX IF NOT EXISTS idx_sparse_term ON sparse_terms(term);');
+      // Import remaps chunk ids, so the persisted BM25 postings are stale; drop them and
+      // let the search worker rebuild the table once (one-time ~60 s, not per session).
+      d.exec('DELETE FROM bm25_postings; DELETE FROM bm25_doclen; DELETE FROM bm25_meta;');
       invalidateBM25();
     }
     return { docs, chunks, skipped };

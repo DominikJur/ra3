@@ -73,7 +73,16 @@ else:
     print(f"corpus embedded + cached in {time.time()-t0:.0f}s", flush=True)
 
 print("embedding test queries ...", flush=True)
-q_dense, q_sparse = embed_all([q["text"] for q in test_queries])
+QD = os.path.join(BASE, "q_dense.npy")
+QS = os.path.join(BASE, "q_sparse.json")
+if os.path.exists(QD) and os.path.exists(QS):
+    print("loading cached query embeddings ...", flush=True)
+    q_dense = np.load(QD)
+    q_sparse = json.load(open(QS, encoding="utf-8"))
+else:
+    q_dense, q_sparse = embed_all([q["text"] for q in test_queries])
+    np.save(QD, q_dense)
+    json.dump(q_sparse, open(QS, "w", encoding="utf-8"))
 
 # ---------- 3. BM25 ----------
 def tokenize(s):
@@ -107,11 +116,26 @@ for i, sp in enumerate(doc_sparse):
     for term, w in sp.items():
         sp_inv[term].append((i, w))
 
-def sparse_scores(qsp):
+def sparse_scores(qsp, prune=False):
     scores = np.zeros(N)
-    for term, qw in qsp.items():
-        for (i, dw) in sp_inv.get(term, []):
-            scores[i] += qw * dw
+    if prune:
+        # Mirror kb-sqlite.ts sparseSearch pruning: top-32 terms by weight,
+        # skip terms with df > 15% of the corpus, cap total postings at 150k.
+        terms = sorted(qsp.items(), key=lambda kv: -kv[1])[:32]
+        budget = 150_000
+        for term, qw in terms:
+            pl = sp_inv.get(term, [])
+            if len(pl) > 0.15 * N:
+                continue
+            if budget <= 0:
+                break
+            for (i, dw) in pl:
+                scores[i] += qw * dw
+            budget -= len(pl)
+    else:
+        for term, qw in qsp.items():
+            for (i, dw) in sp_inv.get(term, []):
+                scores[i] += qw * dw
     return scores
 
 # ---------- 4. evaluate ----------
@@ -124,7 +148,7 @@ def recall_at_k(ranked_ids, rel, k=100):
     rel_docs = {d for d, r in rel.items() if r > 0}
     return len(set(ranked_ids[:k]) & rel_docs) / len(rel_docs) if rel_docs else 0.0
 
-res = {name: {"ndcg10": [], "r100": []} for name in ("dense", "bm25", "sparse", "3leg")}
+res = {name: {"ndcg10": [], "r100": []} for name in ("dense", "bm25", "sparse", "3leg", "3leg+prune")}
 doc_ids = [d[0] for d in docs]
 
 for qi, q in enumerate(test_queries):
@@ -132,14 +156,20 @@ for qi, q in enumerate(test_queries):
     ds = q_dense[qi] @ doc_dense.T
     bs = bm25_scores(tokenize(q["text"]))
     ss = sparse_scores(q_sparse[qi])
+    ss_p = sparse_scores(q_sparse[qi], prune=True)
     rank = lambda s: [doc_ids[i] for i in np.argsort(-s)]
-    rd, rb, rs = rank(ds), rank(bs), rank(ss)
+    rd, rb, rs, rsp = rank(ds), rank(bs), rank(ss), rank(ss_p)
     rrf = {}
     for lst in (rd, rb, rs):
         for r, did in enumerate(lst[:200]):
             rrf[did] = rrf.get(did, 0) + 1 / (r + 60)
     r3 = sorted(rrf, key=lambda d: -rrf[d])
-    for name, lst in (("dense", rd), ("bm25", rb), ("sparse", rs), ("3leg", r3)):
+    rrf_p = {}
+    for lst in (rd, rb, rsp):
+        for r, did in enumerate(lst[:200]):
+            rrf_p[did] = rrf_p.get(did, 0) + 1 / (r + 60)
+    r3p = sorted(rrf_p, key=lambda d: -rrf_p[d])
+    for name, lst in (("dense", rd), ("bm25", rb), ("sparse", rs), ("3leg", r3), ("3leg+prune", r3p)):
         res[name]["ndcg10"].append(ndcg_at_k(lst, rel))
         res[name]["r100"].append(recall_at_k(lst, rel))
 
