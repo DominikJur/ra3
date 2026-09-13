@@ -3,6 +3,7 @@
 // document_index · document_search · document_status · document_export_kb · document_import_kb
 // (local knowledge base)
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { DynamicBorder } from '@earendil-works/pi-coding-agent';
 import { Text, type Component } from '@earendil-works/pi-tui';
 import type { Theme } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
@@ -264,7 +265,7 @@ async function serversUp(): Promise<{ embed: boolean; ocr: boolean }> {
 }
 
 let pumping = false;
-let sessionCtx: any = null; // stashed in session_start / first tool call
+
 
 // Legacy single-owner queue state (replaced by lib/queue.ts): no in-memory copy,
 // no lock file — the SQLite queue is the shared source of truth across sessions.
@@ -275,35 +276,7 @@ function initQueue(): void {
   requeueStaleJobs();
 }
 
-function notify(message: string, level: 'info' | 'warning' | 'error'): void {
-  try {
-    sessionCtx?.ui?.notify?.(message, level);
-  } catch {
-    /* no-op in non-TUI modes */
-  }
-}
 
-function refreshQueueUi(): void {
-  try {
-    if (!sessionCtx?.ui) return;
-    const active = listActiveJobs();
-    if (!active.length) {
-      sessionCtx.ui.setWidget?.('ra3-kb', undefined);
-      sessionCtx.ui.setStatus?.('ra3-kb', undefined);
-      return;
-    }
-    const processing = active.filter((j) => j.status === 'processing');
-    const queued = active.filter((j) => j.status === 'queued');
-    const lines = active
-      .slice(0, 6)
-      .map((j) => `[${j.status === 'processing' ? 'processing' : 'queued'}] ${j.label}: ${j.progress}`);
-    if (active.length > 6) lines.push(`… +${active.length - 6} more`);
-    sessionCtx.ui.setWidget?.('ra3-kb', lines);
-    sessionCtx.ui.setStatus?.('ra3-kb', `indexing ${processing.length} · ${queued.length} queued`);
-  } catch {
-    /* ignore UI errors */
-  }
-}
 
 async function pumpQueue(): Promise<void> {
   if (pumping) return;
@@ -315,11 +288,8 @@ async function pumpQueue(): Promise<void> {
       } catch (e) {
         // never let a transient queue/DB/network error kill the pump silently:
         // log it, wait, keep going
-        try {
-          notify(`ra3 queue pump hiccup (will retry): ${(e as Error).message}`, 'warning');
-        } catch {
-          /* no-op */
-        }
+        // Suppressed: pump retries automatically; a transient error isn't actionable.
+        // Permanent failures surface via document_status or the final job notification.
         await sleep(10_000);
       }
     }
@@ -332,7 +302,6 @@ async function pumpOnce(): Promise<void> {
   // crashed-session lease expiry: requeue jobs whose heartbeat went stale
   requeueStaleJobs();
   if (!hasDueJobs()) {
-    refreshQueueUi();
     await sleep(5_000);
     return;
   }
@@ -341,7 +310,6 @@ async function pumpOnce(): Promise<void> {
   // unreachable — the job stays queued and runs when the storm clears.
   const up = await serversUp();
   if (!up.embed || !up.ocr) {
-    refreshQueueUi();
     await sleep(20_000);
     return;
   }
@@ -353,7 +321,6 @@ async function pumpOnce(): Promise<void> {
     await sleep(5_000);
     return;
   }
-  refreshQueueUi();
 
   const heartbeatTimer = setInterval(() => {
     try {
@@ -367,7 +334,6 @@ async function pumpOnce(): Promise<void> {
       { source: job.source, name: job.name, reindex: job.reindex },
       (msg) => {
         updateJob(job.id, { progress: msg });
-        refreshQueueUi();
       },
     );
     updateJob(job.id, {
@@ -375,7 +341,6 @@ async function pumpOnce(): Promise<void> {
       chunks: result.chunks,
       progress: `indexed ${result.chunks} chunks`,
     });
-    notify(`${job.label}: indexed ${result.chunks} chunks: searchable now`, 'info');
   } catch (e) {
     const msg = (e as Error).message;
     if (isRetryableError(msg) && job.attempts < MAX_ATTEMPTS) {
@@ -390,18 +355,12 @@ async function pumpOnce(): Promise<void> {
         progress: `server dropped mid-job (${msg}) — retrying in ${Math.round(backoffMs(attempts) / 1000)}s (attempt ${attempts})`,
         error: msg,
       });
-      notify(
-        `${job.label}: server unreachable mid-job (${msg}) — will retry automatically`,
-        'warning',
-      );
     } else {
       updateJob(job.id, { status: 'error', error: msg, progress: 'failed' });
-      notify(`${job.label}: indexing failed: ${msg}`, 'error');
     }
   } finally {
     clearInterval(heartbeatTimer);
   }
-  refreshQueueUi();
 }
 
 function enqueueIndexJob(params: any): QueueJob {
@@ -415,24 +374,17 @@ function enqueueIndexJob(params: any): QueueJob {
       ?.replace(/\.pdf$/i, '') ||
       src);
   const job = enqueueJob({ label, name, source: src, reindex: !!params.reindex });
-  refreshQueueUi();
   void pumpQueue();
   return job;
 }
 
 export default function (pi: ExtensionAPI) {
-  pi.on('session_start', async (_event, ctx) => {
+  pi.on('session_start', async (_event, _ctx) => {
     try {
-      sessionCtx = ctx; // stash for background-job notifications + progress UI
       initQueue();
       if (hasDueJobs()) void pumpQueue();
-    } catch (e) {
-      // never let a startup error surface as a bare warning: log + keep the session usable
-      try {
-        notify(`ra3 queue init failed: ${(e as Error).message}`, 'warning');
-      } catch {
-        /* no-op */
-      }
+    } catch {
+      // startup error: keep the session usable, queue will retry on next tool call
     }
   });
 
@@ -756,15 +708,14 @@ export default function (pi: ExtensionAPI) {
         }),
       ),
     }),
-    async execute(_id: string, params: any, _signal?: AbortSignal, _onUpdate?: any, ctx?: any) {
+    async execute(_id: string, params: any, _signal?: AbortSignal, _onUpdate?: any, _ctx?: any) {
       try {
-        if (ctx) sessionCtx = ctx;
         const job = enqueueIndexJob(params);
         const result = {
           status: 'queued',
           job_id: job.id,
           label: job.label,
-          note: 'Indexing runs in the background, you can keep working and queue more documents. Track progress with document_status; a notification fires when the job finishes.',
+          note: 'Indexing runs in the background, you can keep working and queue more documents. Track progress with /doc_status.',
         };
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
@@ -847,9 +798,8 @@ export default function (pi: ExtensionAPI) {
       'List indexed documents plus any background indexing jobs (queued / processing / recently finished).',
     promptSnippet: 'List indexed documents + indexing queue',
     parameters: Type.Object({}),
-    async execute(_id: string, _params: any, _signal?: AbortSignal, _onUpdate?: any, ctx?: any) {
+    async execute(_id: string, _params: any, _signal?: AbortSignal, _onUpdate?: any, _ctx?: any) {
       try {
-        if (ctx) sessionCtx = ctx;
         const docs = await listDocuments();
         const queue = listActiveJobs().map((j) => ({
           job_id: j.id,
@@ -1033,6 +983,124 @@ export default function (pi: ExtensionAPI) {
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }], details: result };
       } catch (e) {
         return toolError(`document_pull failed: ${(e as Error).message}`);
+      }
+    },
+  });
+
+  // /doc_status — interactive KB browser command (replaces all notifications)
+  pi.registerCommand('doc_status', {
+    description: 'Browse knowledge base: indexed documents, queue status, recent jobs',
+    handler: async (_args, ctx) => {
+      const docs = listDocuments();
+      const active = listActiveJobs();
+      const recent = listRecentJobs(10);
+      let pendingRemote: number;
+      try {
+        pendingRemote = (await readPendingJobs()).filter((j) => !j.pulled).length;
+      } catch {
+        pendingRemote = 0;
+      }
+
+      // Build items for the selector
+      interface StatusItem {
+        value: string;
+        label: string;
+        description?: string;
+      }
+      const items: StatusItem[] = [];
+
+      // --- Active jobs ---
+      for (const j of active) {
+        const icon = j.status === 'processing' ? '⟳' : '…';
+        const progress = j.progress ? ` — ${j.progress.slice(0, 80)}` : '';
+        items.push({
+          value: `queue:${j.id}`,
+          label: `${icon} ${j.label}`,
+          description: `[${j.status}]${progress}`,
+        });
+      }
+
+      // --- Recent jobs ---
+      for (const j of recent) {
+        const icon = j.status === 'done' ? '✓' : '✗';
+        const detail = j.status === 'done' ? `${j.chunks ?? '?'} chunks` : (j.error ?? 'failed').slice(0, 60);
+        items.push({
+          value: `recent:${j.id}`,
+          label: `${icon} ${j.label}`,
+          description: detail,
+        });
+      }
+
+      // --- Indexed documents ---
+      for (const d of docs) {
+        const info = [`${d.pages}p`, `${d.chunks}ch`, d.ocr].filter(Boolean).join(' · ');
+        items.push({
+          value: `doc:${d.slug}`,
+          label: d.slug,
+          description: info,
+        });
+      }
+
+      if (pendingRemote > 0) {
+        items.push({
+          value: 'remote',
+          label: `${pendingRemote} remote job(s) awaiting pull`,
+          description: 'run /document_pull to ingest',
+        });
+      }
+
+      if (items.length === 0) {
+        ctx.ui.notify('Knowledge base is empty. Use document_index to add papers.', 'info');
+        return;
+      }
+
+      const { SelectList, Container, Text } = await import('@earendil-works/pi-tui');
+
+      const result = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+        const container = new Container();
+        container.addChild(new DynamicBorder((s: string) => theme.fg('accent', s)));
+        container.addChild(new Text(theme.fg('accent', theme.bold('  /doc_status — Knowledge Base Browser')), 0, 0));
+
+        const selectList = new SelectList(items, Math.min(items.length, 16), {
+          selectedPrefix: (t: string) => theme.fg('accent', t),
+          selectedText: (t: string) => theme.fg('accent', t),
+          description: (t: string) => theme.fg('muted', t),
+          scrollInfo: (t: string) => theme.fg('dim', t),
+          noMatch: (t: string) => theme.fg('warning', t),
+        });
+        selectList.onSelect = (item: StatusItem) => done(item.value);
+        selectList.onCancel = () => done(null);
+        container.addChild(selectList);
+        container.addChild(
+          new Text(theme.fg('dim', '  ↑↓ navigate · enter select · esc close'), 0, 0),
+        );
+        container.addChild(new DynamicBorder((s: string) => theme.fg('accent', s)));
+
+        return {
+          render: (w: number) => container.render(w),
+          invalidate: () => container.invalidate(),
+          handleInput: (data: string) => {
+            selectList.handleInput(data);
+            tui.requestRender();
+          },
+        };
+      });
+
+      if (!result) return;
+
+      if (result.startsWith('doc:')) {
+        const slug = result.slice(4);
+        const doc = docs.find((d) => d.slug === slug);
+        if (doc) {
+          const lines = [
+            `Document: ${doc.slug}`,
+            `Source: ${doc.source}`,
+            `Pages: ${doc.pages}  |  Chunks: ${doc.chunks}`,
+            `OCR: ${doc.ocr}  |  Model: ${doc.model}  |  Dim: ${doc.dim}`,
+            `Indexed: ${doc.createdAt}`,
+          ].join('\n');
+          ctx.ui.notify(lines, 'info');
+        }
       }
     },
   });

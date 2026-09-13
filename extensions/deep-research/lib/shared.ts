@@ -254,12 +254,11 @@ export async function fetchPdfByDoi(doi: string, signal?: AbortSignal): Promise<
 }
 
 export function slugify(s: string): string {
-  return (
-    (s || 'paper')
-      .replace(/[^a-zA-Z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 60) || 'paper'
-  );
+  const raw = (s || 'paper').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'paper';
+  if (raw.length <= 60) return raw;
+  // Append a short hash when truncating so two different long titles never collide.
+  const hash = simpleHash(s).slice(0, 8);
+  return raw.slice(0, 51) + '-' + hash;
 }
 
 export function simpleHash(s: string): string {

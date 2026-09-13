@@ -98,7 +98,7 @@ export function markdownToSections(md: string): OcrSection[] {
   return sections.length ? sections : [{ heading: '', page: 1, text: md }];
 }
 
-const OCR_JOB_TIMEOUT_MS = 150 * 60 * 1000; // client cap; server OCR_TIMEOUT defaults to 7200s
+const OCR_JOB_TIMEOUT_MS = 130 * 60 * 1000; // client cap must be ≥ server OCR_TIMEOUT (default 7200s = 120 min)
 const OCR_POLL_MS = 15_000;
 
 function mdResult(md: string) {

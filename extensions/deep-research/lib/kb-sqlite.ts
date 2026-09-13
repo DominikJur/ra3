@@ -259,8 +259,8 @@ export function ingestChunks(opts: {
     // works because WAL allows concurrent readers).
     try {
       d.exec('PRAGMA wal_checkpoint(TRUNCATE)');
-    } catch {
-      /* best effort */
+    } catch (e) {
+      console.warn('[ra3] WAL checkpoint failed (kb.sqlite-wal may grow):', (e as Error).message);
     }
   } catch (e) {
     d.exec('ROLLBACK');
@@ -427,12 +427,19 @@ async function embedQuery(text: string): Promise<QueryEmbed> {
       });
       if (!res.ok) throw new Error(`embed HTTP ${res.status}`);
       const j = await res.json();
+      if (!Array.isArray(j?.dense) || !j.dense[0]) {
+        throw new Error(`embed server returned malformed response: missing dense (got ${JSON.stringify(Object.keys(j ?? {}))})`);
+      }
       const dense = new Float32Array(j.dense[0]);
+      if (dense.length !== DIM) {
+        throw new Error(`embed server returned wrong dense dimension: expected ${DIM}, got ${dense.length}`);
+      }
       const sparse = new Map<string, number>();
       for (const [t, w] of Object.entries(j.sparse?.[0] ?? {})) sparse.set(t, w as number);
       return { dense, sparse };
-    } catch {
+    } catch (e) {
       if (attempt === 1) await new Promise((r) => setTimeout(r, 250));
+      if (attempt === 2) console.warn('[ra3] embed query failed, falling back to keyword-only:', (e as Error).message);
     }
   }
   // No local vector fallback on purpose: the stored vectors are FlagEmbedding BGE-M3 fp16.
